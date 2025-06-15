@@ -1,0 +1,6 @@
+{
+  "name": "CLASIFICADOR DE DELITOS",
+  "description": "An application to classify crime reports from Excel files using AI, leveraging the Gemini API for natural language processing and classification tasks.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
