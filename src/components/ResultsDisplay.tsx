@@ -1,27 +1,24 @@
 import React from 'react';
-import { ProcessedRowData, CLASSIFICATION_KEYS_ORDERED, CLASSIFICATION_LABELS } from '../types'; // Importar ProcessedRowData
+import { ProcessedRowData, EXCEL_OUTPUT_HEADERS, CLASSIFICATION_LABELS, IA_CLASSIFICATION_KEYS } from '../types';
 import { DownloadIcon } from './icons/DownloadIcon';
 import { RotateCcwIcon } from './icons/RotateCcwIcon';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { AlertTriangleIcon } from './icons/AlertTriangleIcon';
-// No importamos procesarExcel aquí directamente, lo manejaremos desde App.tsx
 
 interface ResultsDisplayProps {
-  results: ProcessedRowData[]; // Aseguramos el tipo correcto
-  onDownloadExcel: () => void; // Cambiado para claridad
-  onDownloadLog: () => void; // Nueva prop para descargar log
+  results: ProcessedRowData[];
+  onDownloadExcel: () => void;
+  onDownloadLog: () => void;
   onReset: () => void;
-  onProcessLegalLocal: () => void; // Nueva prop para el botón de lógica legal
+  onProcessLegalLocal: () => void;
+  logText: string;
 }
 
-export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownloadExcel, onDownloadLog, onReset, onProcessLegalLocal }) => {
+export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownloadExcel, onDownloadLog, onReset, onProcessLegalLocal, logText }) => {
   const totalRows = results.length;
-  // Ajuste en el filtro para que "Relato vacío" se considere una clasificación exitosa de IA,
-  // dado que es un caso manejado y no un error de procesamiento de la IA.
   const successfulClassifications = results.filter(row => !row.errorMessage || row.errorMessage === "Relato vacío, usando valores por defecto.").length;
-  // Los errores de IA son aquellos que NO son "Relato vacío"
   const erroredDuringAI = results.filter(row => row.errorMessage && row.errorMessage !== "Relato vacío, usando valores por defecto.").length;
-  const rowsToReview = results.filter(row => row.errorMessage); // Todas las filas con algún mensaje de error
+  const rowsToReview = results.filter(row => row.errorMessage);
 
   return (
     <div className="w-full">
@@ -69,10 +66,10 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
             <thead className="bg-slate-700 sticky top-10 z-10">
               <tr>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider"># Original</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider">Relato (Extracto)</th>
-                {CLASSIFICATION_KEYS_ORDERED.map(key => (
+                {/* Usar EXCEL_OUTPUT_HEADERS para mostrar todas las columnas en el orden correcto */}
+                {EXCEL_OUTPUT_HEADERS.map(key => (
                   <th key={key} scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider">
-                    {CLASSIFICATION_LABELS[key]}
+                    {CLASSIFICATION_LABELS[key] || key} {/* Usa la etiqueta si existe, sino el nombre de la clave */}
                   </th>
                 ))}
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider">Error IA</th>
@@ -82,13 +79,15 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
               {results.slice(0, 10).map((row) => (
                 <tr key={row.originalIndex} className="hover:bg-slate-700/50 transition-colors">
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{row.originalIndex + 1}</td>
-                  <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 truncate max-w-xs" title={row.RELATO_NORMALIZED_VALUE}>
-                    {row.RELATO_NORMALIZED_VALUE ? `${row.RELATO_NORMALIZED_VALUE.substring(0, 50)}...` : 'N/A'}
-                  </td>
-                  {CLASSIFICATION_KEYS_ORDERED.map(key => (
-                    <td key={key} className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">
-                      {/* Acceder a row.classification[key] para los valores clasificados */}
-                      {row.classification[key] || '-'}
+                  {EXCEL_OUTPUT_HEADERS.map(key => (
+                    <td key={key} className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 truncate max-w-xs"
+                        title={key === "RELATO" ? row.RELATO_NORMALIZED_VALUE : (row.classification[key] || row[key] || '-')}>
+                      {
+                        key === "RELATO" ?
+                          (row.RELATO_NORMALIZED_VALUE ? `${row.RELATO_NORMALIZED_VALUE.substring(0, 50)}...` : 'N/A')
+                        :
+                        (row.classification[key] || row[key] || '-') // Mostrar clasificación de IA, o valor original de la fila
+                      }
                     </td>
                   ))}
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-red-400">{row.errorMessage && row.errorMessage !== "Relato vacío, usando valores por defecto." ? row.errorMessage : '-'}</td>
@@ -102,7 +101,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
 
       <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center">
         <button
-          onClick={onDownloadExcel} // Usar nueva prop
+          onClick={onDownloadExcel}
           disabled={results.length === 0}
           className="flex items-center justify-center w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-opacity-50"
         >
@@ -110,15 +109,15 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
           Descargar Excel Clasificado
         </button>
         <button
-          onClick={onDownloadLog} // Nueva prop para descargar log
-          disabled={!logText} // Habilitar solo si hay log
+          onClick={onDownloadLog}
+          disabled={!logText}
           className="flex items-center justify-center w-full sm:w-auto bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-opacity-50"
         >
           <DownloadIcon className="h-5 w-5 mr-2" />
           Descargar LOG IA
         </button>
         <button
-          onClick={onProcessLegalLocal} // Usar nueva prop
+          onClick={onProcessLegalLocal}
           className="flex items-center justify-center w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50"
         >
           🧠 Generar Excel Legal + LOG (sin IA)

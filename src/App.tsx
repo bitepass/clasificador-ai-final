@@ -2,30 +2,29 @@ import React, { useState } from "react";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
-import { classifyRelatoBatch, downloadExcel, downloadLog, processExcel as readExcelFile } from "./services/geminiService"; // Alias processExcel para evitar conflicto
-import { procesarExcel as procesarExcelLocal } from "./services/excelService"; // Alias procesarExcel
+import { classifyRelatoBatch, downloadExcel, downloadLog, processExcel as readExcelFile } from "./services/geminiService";
+import { procesarExcel as procesarExcelLocal } from "./services/excelService";
 import FileUpload from "./components/FileUpload";
 import StepIndicator from "./components/StepIndicator";
 import ResultsDisplay from "./components/ResultsDisplay";
-import { AppStep, ProcessedRowData } from "./types"; // Importar ProcessedRowData
-import { Header } from "./components/Header"; // Importar Header
-import { Footer } from "./components/Footer"; // Importar Footer
-import { GEMINI_MODEL_NAME } from "./constants"; // Importar el nombre del modelo de constantes
-import { ErrorModal } from "./components/ErrorModal"; // Importar ErrorModal
+import { AppStep, ProcessedRowData } from "./types";
+import { Header } from "./components/Header";
+import { Footer } from "./components/Footer";
+import { GEMINI_MODEL_NAME } from "./constants";
+import { ErrorModal } from "./components/ErrorModal";
+import { ProcessingView } from "./components/ProcessingView"; // Importación correcta
 
 import "./index.css";
 
 const App = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [step, setStep] = useState<AppStep>(AppStep.UPLOAD);
-  const [results, setResults] = useState<ProcessedRowData[]>([]); // Usar el tipo correcto
+  const [results, setResults] = useState<ProcessedRowData[]>([]);
   const [logText, setLogText] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [estimatedProcessingTime, setEstimatedProcessingTime] = useState<string>(""); // Nuevo estado
 
-  // Variable global para guardar el último archivo subido (necesario para el botón de legal local en ResultsDisplay)
-  // ESTO NO ES UNA BUENA PRÁCTICA en React. Idealmente, pasa `uploadedFile` como prop o maneja el estado.
-  // Lo mantengo por compatibilidad con tu estructura, pero considera refactorizar.
   declare global {
     interface Window {
       __lastUploadedFile__: File | null;
@@ -36,12 +35,13 @@ const App = () => {
 
   const handleFileUpload = (file: File) => {
     setUploadedFile(file);
-    window.__lastUploadedFile__ = file; // Actualizar la variable global
+    window.__lastUploadedFile__ = file;
     setStep(AppStep.PROCESSING);
     setError("");
-    setResults([]); // Limpiar resultados anteriores
-    setLogText(""); // Limpiar log anterior
+    setResults([]);
+    setLogText("");
     setIsProcessing(true);
+    setEstimatedProcessingTime("Calculando tiempo estimado..."); // Mensaje inicial
 
     const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
     if (!API_KEY) {
@@ -50,14 +50,41 @@ const App = () => {
       setError(errMsg);
       setStep(AppStep.UPLOAD);
       setIsProcessing(false);
+      setEstimatedProcessingTime("");
       return;
     }
 
     const genAI = new GoogleGenerativeAI(API_KEY);
 
-    readExcelFile(file) // Usar el alias
+    readExcelFile(file)
       .then(async (rows) => {
-        const { classifiedData, log } = await classifyRelatoBatch(genAI, rows); // Ahora devuelve log
+        // Calcular tiempo estimado más fiel:
+        // Esta es una aproximación. El tiempo real depende de la complejidad del relato
+        // y la carga del servidor de la IA. Un buen promedio inicial podría ser:
+        const averageTimePerRelatoMs = 3000; // 3 segundos por relato (puedes ajustarlo después de pruebas)
+        const totalEstimatedTimeMs = rows.length * averageTimePerRelatoMs;
+        
+        let timeMessage = "";
+        const hours = Math.floor(totalEstimatedTimeMs / 3600000); // 1 hora = 3,600,000 ms
+        const remainingMinutes = Math.floor((totalEstimatedTimeMs % 3600000) / 60000);
+        const remainingSeconds = Math.round((totalEstimatedTimeMs % 60000) / 1000);
+
+        if (hours > 0) {
+          timeMessage += `${hours} hora(s) `;
+        }
+        if (remainingMinutes > 0) {
+          timeMessage += `${remainingMinutes} minuto(s) `;
+        }
+        if (remainingSeconds > 0 || (hours === 0 && remainingMinutes === 0)) { // Mostrar segundos si es 0 horas y 0 minutos
+          timeMessage += `${remainingSeconds} segundo(s)`;
+        }
+        if (timeMessage.trim() === "") {
+          timeMessage = "unos segundos"; // Para casos de muy pocas filas
+        }
+
+        setEstimatedProcessingTime(`Esto puede tomar aproximadamente ${timeMessage}, dependiendo de la cantidad de filas.`);
+
+        const { classifiedData, log } = await classifyRelatoBatch(genAI, rows);
         setResults(classifiedData);
         setLogText(log);
         setStep(AppStep.RESULTS);
@@ -69,10 +96,10 @@ const App = () => {
       })
       .finally(() => {
         setIsProcessing(false);
+        setEstimatedProcessingTime(""); // Limpiar al finalizar
       });
   };
 
-  // Clasificación legal local (sin IA)
   const handleProcessLegalLocal = async () => {
     if (!uploadedFile) {
       setError("Por favor carga un archivo Excel primero.");
@@ -81,32 +108,31 @@ const App = () => {
 
     setIsProcessing(true);
     setError("");
+    setEstimatedProcessingTime("Procesando con lógica legal local...");
     
     try {
-      // Esta función ya descarga automáticamente, y devuelve Promise<void>
-      await procesarExcelLocal(uploadedFile); // Usar el alias
-      // No necesitamos setear resultados o log aquí, ya que excelService lo maneja.
-      // Pero podemos volver a la pantalla de carga para que el usuario suba otro archivo.
-      resetApp(); // Resetear para permitir nueva carga o procesamiento
+      await procesarExcelLocal(uploadedFile);
+      resetApp();
       alert("Archivos descargados exitosamente (Excel Clasificado + LOG de Lógica Legal).");
     } catch (err) {
       console.error("Error en clasificación legal local:", err);
       setError(`Error al procesar con lógica legal local: ${err.message || err}`);
     } finally {
       setIsProcessing(false);
+      setEstimatedProcessingTime("");
     }
   };
 
   const handleDownloadExcel = () => {
     if (results.length > 0) {
-      const excelBlob = downloadExcel(results, "San Martín 2025 - Clasificado IA.xlsx"); // Usar el nombre de archivo más descriptivo
+      const excelBlob = downloadExcel(results, "San Martín 2025 - Clasificado IA.xlsx");
       saveAs(excelBlob, "San Martín 2025 - Clasificado IA.xlsx");
     }
   };
 
   const handleDownloadLog = () => {
     if (logText) {
-      const logBlob = downloadLog(logText, "San Martín 2025 - Clasificador IA LOG.txt"); // Usar el nombre de archivo más descriptivo
+      const logBlob = downloadLog(logText, "San Martín 2025 - Clasificador IA LOG.txt");
       saveAs(logBlob, "San Martín 2025 - Clasificador IA LOG.txt");
     }
   };
@@ -114,22 +140,23 @@ const App = () => {
 
   const resetApp = () => {
     setUploadedFile(null);
-    window.__lastUploadedFile__ = null; // Limpiar también la variable global
+    window.__lastUploadedFile__ = null;
     setStep(AppStep.UPLOAD);
     setResults([]);
     setLogText("");
     setError("");
     setIsProcessing(false);
+    setEstimatedProcessingTime("");
   };
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-900 text-white">
-      <Header /> {/* Agregado el componente Header */}
+      <Header />
       <main className="flex-grow max-w-4xl mx-auto p-4 flex flex-col items-center justify-center w-full">
         <h1 className="text-2xl font-bold mb-4 text-center">Clasificador de Delitos</h1>
-        <StepIndicator currentStep={step} /> {/* Cambiado 'step' a 'currentStep' */}
+        <StepIndicator currentStep={step} />
         
-        {error && <ErrorModal message={error} onClose={() => setError("")} />} {/* Usar ErrorModal */}
+        {error && <ErrorModal message={error} onClose={() => setError("")} />}
         
         {step === AppStep.UPLOAD && (
           <FileUpload onFileUpload={handleFileUpload} disabled={isProcessing}/>
@@ -137,24 +164,25 @@ const App = () => {
         
         {step === AppStep.PROCESSING && (
           <ProcessingView 
-            progress={50} // Puedes implementar lógica de progreso real aquí
+            progress={50}
             message="Analizando relatos con Inteligencia Artificial..."
-            estimatedTime="Esto puede tomar unos minutos, dependiendo de la cantidad de filas."
-            onCancel={resetApp} // Permitir cancelar y resetear
+            estimatedTime={estimatedProcessingTime}
+            onCancel={resetApp}
           />
         )}
         
         {step === AppStep.RESULTS && (
           <ResultsDisplay
             results={results}
-            onDownloadExcel={handleDownloadExcel} // Nueva prop
-            onDownloadLog={handleDownloadLog} // Nueva prop
+            onDownloadExcel={handleDownloadExcel}
+            onDownloadLog={handleDownloadLog}
             onReset={resetApp}
-            onProcessLegalLocal={handleProcessLegalLocal} // Pasar la función al ResultsDisplay
+            onProcessLegalLocal={handleProcessLegalLocal}
+            logText={logText}
           />
         )}
       </main>
-      <Footer /> {/* Agregado el componente Footer */}
+      <Footer />
     </div>
   );
 };
