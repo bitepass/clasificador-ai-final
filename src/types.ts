@@ -46,6 +46,16 @@ export interface FilaClasificada extends FilaExcel, ClasificacionLegal {
   error?: string;
 }
 
+// Nueva interfaz para los datos procesados que ResultsDisplay espera
+// Combina la fila original, la clasificación, el valor normalizado del relato y el mensaje de error.
+export interface ProcessedRowData extends FilaExcel {
+  originalIndex: number; // Índice original para la tabla
+  classification: ClasificacionLegal; // La clasificación obtenida (IA o por defecto)
+  RELATO_NORMALIZED_VALUE: string; // El relato limpio para mostrar
+  errorMessage?: string; // Mensaje de error si lo hubo
+}
+
+
 // Props para componentes
 export interface ConfirmationModalProps {
   isOpen: boolean;
@@ -56,3 +66,22 @@ export interface ConfirmationModalProps {
   confirmText?: string;
   cancelText?: string;
 }
+
+// Constantes añadidas para ordenar y etiquetar las columnas en ResultsDisplay
+export const CLASSIFICATION_KEYS_ORDERED: (keyof ClasificacionLegal)[] = [
+  "CALIFICACION LEGAL",
+  "MODALIDAD",
+  "ARMA",
+  "LESIONADA",
+  "VICTIMA",
+  "IMPUTADO"
+];
+
+export const CLASSIFICATION_LABELS: Record<keyof ClasificacionLegal, string> = {
+  "CALIFICACION LEGAL": "Calificación Legal",
+  "MODALIDAD": "Modalidad",
+  "ARMA": "Arma",
+  "LESIONADA": "¿Lesionada?",
+  "VICTIMA": "Víctima",
+  "IMPUTADO": "Imputado"
+};

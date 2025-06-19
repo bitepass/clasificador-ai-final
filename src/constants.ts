@@ -1,5 +1,8 @@
 // Modelo Gemini actualizado
-export const GEMINI_MODEL_NAME = 'gemini-pro';
+// Cambiamos 'gemini-pro' a 'gemini-1.0-pro' que es el nombre actual y estable para este tipo de tarea.
+// Si deseas probar el modelo más avanzado (y con mayor contexto), puedes usar 'gemini-1.5-pro-latest'
+// pero ten en cuenta sus límites de uso y posibles costos si excedes el free tier.
+export const GEMINI_MODEL_NAME = 'gemini-1.0-pro'; // CAMBIADO AQUÍ
 
 // Columna que contiene el relato
 export const RELATO_COLUMN_KEYWORDS = ['RELATO', 'relato', 'Relato'];
