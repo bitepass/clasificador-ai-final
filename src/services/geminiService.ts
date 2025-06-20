@@ -4,207 +4,334 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   ClasificacionLegal, FilaExcel, ProcessedRowData,
   CLASIFICACION_DEFAULT, VALORES_VALIDOS, EXCEL_OUTPUT_HEADERS,
-  IA_CLASSIFICATION_KEYS
+  IA_CLASSIFICATION_KEYS, DISPLAY_TO_INTERNAL_KEY_MAP
 } from '../types';
-import { GEMINI_MODEL_NAME } from '../constants';
+import { GEMINI_MODEL_NAME, RELATO_COLUMN_KEYWORDS } from '../constants';
 
-// Función para leer el archivo Excel y convertirlo a JSON
-export async function processExcel(file: File): Promise<FilaExcel[]> {
+// Funciones auxiliares para Excel
+export async function readExcelFile(file: File): Promise<FilaExcel[]> {
   const data = await file.arrayBuffer();
   const workbook = XLSX.read(data);
-  const sheetName = workbook.SheetNames[0];
+  const sheetName = workbook.SheetNames[0]; // Lee la primera hoja por defecto
   const sheet = workbook.Sheets[sheetName];
-  const json = XLSX.utils.sheet_to_json<FilaExcel>(sheet);
-  return json;
+
+  const rawJson: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
+
+  if (rawJson.length === 0) {
+      return []; // Archivo vacío
+  }
+
+  const actualHeaders: string[] = rawJson[0].map(h => String(h || '').trim());
+  const dataRows = rawJson.slice(1);
+
+  let relatoColumnName: string | undefined;
+  for (const header of actualHeaders) {
+      const normalizedHeader = header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (RELATO_COLUMN_KEYWORDS.some(keyword => normalizedHeader.includes(keyword.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")))) {
+          relatoColumnName = header;
+          break;
+      }
+  }
+
+  if (!relatoColumnName) {
+      console.warn("No se encontró una columna de relato clara. Se intentará usar 'RELATO' si existe, o la primera columna con texto largo.");
+      const potentialRelatoColumn = actualHeaders.find(header => {
+          const sampleValue = dataRows[0]?.[actualHeaders.indexOf(header)];
+          return sampleValue && String(sampleValue).length > 50;
+      });
+      relatoColumnName = potentialRelatoColumn || actualHeaders[0];
+      if (!relatoColumnName) {
+          throw new Error("No se pudo identificar una columna de relato en el archivo Excel.");
+      }
+  }
+
+  const processedJson: FilaExcel[] = dataRows.map(rowArray => {
+      const rowObject: FilaExcel = {};
+      actualHeaders.forEach((header, index) => {
+          const value = rowArray[index];
+          rowObject[header] = (value !== null && value !== undefined) ? String(value).trim() : '';
+      });
+      rowObject.RELATO = String(rowObject[relatoColumnName!] || '').trim();
+      return rowObject;
+  }).filter(row => Object.values(row).some(value => value));
+
+  return processedJson;
 }
 
-// Función para validar y limpiar la respuesta de la IA
-// Asegura que solo se usen valores válidos de nuestras listas
+
+async function readBinaryExcelTemplate(file: File): Promise<XLSX.WorkBook> {
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data, { type: 'array', cellStyles: true });
+  return workbook;
+}
+
 function validateAndCleanClassification(
-  rawClassification: any // La respuesta JSON parseada de la IA
+  rawClassification: any,
+  logEntries: string[]
 ): ClasificacionLegal {
-  const cleanClassification: ClasificacionLegal = { ...CLASIFICACION_DEFAULT }; // Iniciar con valores por defecto
+  const cleanClassification: ClasificacionLegal = { ...CLASIFICACION_DEFAULT };
 
-  // Iterar solo sobre las claves que la IA debería clasificar
-  for (const key of IA_CLASSIFICATION_KEYS) {
-    const rawValue = rawClassification[key];
-    const validOptions = VALORES_VALIDOS[key]; // Obtener las opciones válidas para esta clave
+  for (const displayKey of IA_CLASSIFICATION_KEYS) {
+    const internalKey = DISPLAY_TO_INTERNAL_KEY_MAP[displayKey];
+    const rawValue = rawClassification[internalKey || displayKey];
 
-    if (rawValue !== undefined && typeof rawValue === 'string') {
+    const validOptions = VALORES_VALIDOS[internalKey || displayKey];
+
+    if (rawValue !== undefined && rawValue !== null && typeof rawValue === 'string') {
       const upperCaseValue = rawValue.toUpperCase().trim();
 
-      // Si hay opciones válidas definidas y el valor de la IA está entre ellas
       if (Array.isArray(validOptions) && validOptions.includes(upperCaseValue)) {
-        cleanClassification[key] = upperCaseValue;
+        cleanClassification[displayKey as keyof ClasificacionLegal] = upperCaseValue;
       } else {
-        // Si el valor de la IA NO es válido para una lista predefinida, usar el valor por defecto
-        cleanClassification[key] = CLASIFICACION_DEFAULT[key];
+        cleanClassification[displayKey as keyof ClasificacionLegal] = CLASIFICACION_DEFAULT[displayKey];
+        logEntries.push(`    [!] ADVERTENCIA: Campo "${displayKey}". Valor de IA "${rawValue}" NO VÁLIDO. Usando '${CLASIFICACION_DEFAULT[displayKey]}'.`);
       }
     } else {
-      // Si el valor no está presente o no es un string, usar el valor por defecto
-      cleanClassification[key] = CLASIFICACION_DEFAULT[key];
+      cleanClassification[displayKey as keyof ClasificacionLegal] = CLASIFICACION_DEFAULT[displayKey];
+      if (rawValue !== undefined && rawValue !== null) {
+        logEntries.push(`    [!] ADVERTENCIA: Campo "${displayKey}". Valor de IA "${rawValue}" (tipo ${typeof rawValue}) NO ES VÁLIDO. Usando '${CLASIFICACION_DEFAULT[displayKey]}'.`);
+      }
     }
   }
   return cleanClassification;
 }
 
+const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
-export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaExcel[]): Promise<{ classifiedData: ProcessedRowData[]; log: string }> {
+
+export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaExcel[], templateFile: File | null): Promise<{ classifiedData: ProcessedRowData[]; log: string }> {
   const model = genAI.getGenerativeModel({ model: GEMINI_MODEL_NAME });
 
+  let templateWorkbook: XLSX.WorkBook | null = null;
+  let templateSheetName: string | null = null;
+  const HEADER_ROW_COUNT = 2;
+
+  if (templateFile) {
+    try {
+      templateWorkbook = await readBinaryExcelTemplate(templateFile);
+      sheetName = templateWorkbook.SheetNames[0];
+    } catch (e: any) {
+      console.error("Error al leer la plantilla Excel:", e);
+    }
+  }
+
   const classifiedData: ProcessedRowData[] = [];
-  const logEntries: string[] = [`CLASIFICADOR DE DELITOS - LOG GENERADO: ${new Date().toLocaleString()}\n`];
+  const logEntries: string[] = [];
+
+  logEntries.push(`=================================================================\n`);
+  logEntries.push(`= INICIO DE PROCESAMIENTO CON INTELIGENCIA ARTIFICIAL =\n`);
+  logEntries.push(`=================================================================\n`);
+  logEntries.push(`Fecha y Hora: ${new Date().toLocaleString()}\n`);
   logEntries.push(`Modelo de IA utilizado: ${GEMINI_MODEL_NAME}\n`);
+  logEntries.push(`Total de filas a procesar: ${rows.length}\n`);
+  logEntries.push(`Plantilla de Excel cargada: ${templateFile ? templateFile.name : 'No'}\n`);
+  logEntries.push(`\n`);
+
+  const REQUESTS_PER_BATCH = 50;
+  const DELAY_BETWEEN_BATCHES_MS = 500;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    // Se intenta obtener el relato de varias columnas posibles y se normaliza
-    const relato = (row.relato || row.RELATO || row["RELATO ORIGINAL"] || "").toString().trim(); // Añadí "RELATO ORIGINAL" por si acaso
-
-    // Iniciar con un objeto que combine datos originales y clasificación por defecto
-    const initialClassification: ClasificacionLegal = { ...CLASIFICACION_DEFAULT };
-    // Rellenar los campos de la clasificación que provienen directamente del Excel original
-    for (const header of EXCEL_OUTPUT_HEADERS) {
-        if (!IA_CLASSIFICATION_KEYS.includes(header as keyof ClasificacionLegal)) {
-            // Si la columna existe en la fila original, la copiamos
-            if (row[header] !== undefined) {
-                initialClassification[header] = row[header].toString();
-            }
-            // El relato original es especial, ya lo normalizamos arriba
-            if (header === "RELATO") {
-                initialClassification["RELATO"] = relato;
-            }
-        }
+    if (!row || Object.keys(row).length === 0 || Object.values(row).every(val => !val)) {
+      logEntries.push(`\n=== FILA ${i + 2} (ID: ${row?.id_hecho || 'N/A'}) - OMITIDA ===\n`); // Sección más clara
+      logEntries.push(`  MOTIVO: Fila vacía o no se pudo leer.\n`);
+      logEntries.push(`-----------------------------------------------------------------\n`);
+      continue;
     }
+
+    const relato = (row.RELATO || "").toString().trim();
+
+    const finalClassificationForRow: ClasificacionLegal = { ...CLASIFICACION_DEFAULT };
+
+    for (const header of EXCEL_OUTPUT_HEADERS) {
+      if (row[header] !== undefined && row[header] !== null) {
+        finalClassificationForRow[header as keyof ClasificacionLegal] = String(row[header]).trim();
+      } else {
+        finalClassificationForRow[header as keyof ClasificacionLegal] = CLASIFICACION_DEFAULT[header];
+      }
+    }
+
+    finalClassificationForRow["relato"] = relato;
 
     const baseProcessedRow: ProcessedRowData = {
       originalIndex: i,
-      originalRowData: row, // Guardar la fila original completa
+      originalRowData: row,
       RELATO_NORMALIZED_VALUE: relato,
-      classification: initialClassification, // Esta clasificación ya tiene los datos originales y defaults
+      classification: finalClassificationForRow,
       errorMessage: undefined
     };
+
+    logEntries.push(`\n=== PROCESANDO FILA ${i + 2} (ID Original: ${row.id_hecho || 'N/A'}) ===\n`);
+    logEntries.push(`  Relato Completo:\n  "${relato}"\n`); // Muestra el relato completo
 
     if (!relato) {
       classifiedData.push({
         ...baseProcessedRow,
         errorMessage: "Relato vacío, usando valores por defecto."
       });
-      logEntries.push(`Fila ${i + 2}: RELATO VACÍO - Clasificación por defecto aplicada.\n`);
-      logEntries.push(`Output: ${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
+      logEntries.push(`  >>> RESULTADO: RELATO VACÍO - Clasificación por defecto aplicada. <<<\n`);
+      logEntries.push(`  Clasificación Final Generada:\n${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
+      logEntries.push(`-----------------------------------------------------------------\n`);
       continue;
     }
 
     try {
-      // Construcción del PROMPT MEJORADA con opciones exactas y formato estricto
       const prompt = `Analiza el siguiente relato delictivo. Identifica la información relevante para las siguientes categorías.
       Tu respuesta debe ser estricta y ÚNICAMENTE un objeto JSON. No incluyas ningún otro texto, markdown, preámbulos o explicaciones fuera del JSON.
 
       Relato: "${relato}"
 
-      INSTRUCCIONES CLAVE DE CLASIFICACIÓN Y VALORES VÁLIDOS (elige uno EXACTO, en MAYÚSCULAS):
-      - Si un valor no se puede determinar con certeza a partir del relato, o no coincide con ninguna opción válida, DEBES utilizar el valor por defecto "NO ESPECIFICADO" (o "NO" para campos binarios como LESIONADA/TENTATIVA) de la lista de VALORES VÁLIDOS.
+      INSTRUCCIONES CLAVE DE CLASIFICACIÓN:
+      - Para cada categoría, DEBES seleccionar uno de los valores válidos de la lista proporcionada. Si un valor no se puede determinar con certeza a partir del relato, o el relato no ofrece información para una categoría, DEBES utilizar el valor por defecto "NO ESPECIFICADO" (o "NO" para campos binarios como LESIONADA/TENTATIVA) de la lista de VALORES VÁLIDOS.
+      - Los valores deben ser EXACTOS (MAYÚSCULAS y SIN ACENTOS si el valor en la lista no los tiene, o CON ACENTOS si la lista los tiene).
+      - Para "CALIFICACION", prioriza el delito principal. Si no es de interés, usa "NINGUNO DE INTERES".
+      - Para "ARMAS", si no es de fuego o blanca, y se usó un objeto para dañar, clasifica como "IMPROPIA". Si no se menciona arma o no se usó, usa "NO ESPECIFICADO".
+      - Para "LESIONADA", responde "SI" si el relato menciona lesiones/heridas, "NO" en caso contrario.
+      - Para "VICTIMA", "IMPUTADO", si hay varios géneros o no se especifica, usa "AMBOS" o "NO ESPECIFICADO" respectivamente.
+      - Para "MENOR/MAYOR", busca indicios de edad del imputado. Si no se puede determinar, usa "NO ESPECIFICADO".
+      - Para "JURISDICCION" y "LUGAR", intenta extraer del relato los valores más precisos de las listas dadas.
+      - Para "TENTATIVA", "SI" si el delito fue intentado pero no consumado, "NO" si fue consumado o no aplica.
+      - Para "OBSERVACION" y "FRECUENCIA", usa "NO ESPECIFICADO" a menos que el relato brinde información explícita para una de las opciones válidas.
 
-      {
-        "CALIFICACION LEGAL": "[${VALORES_VALIDOS["CALIFICACION LEGAL"].map(v => `"${v}"`).join('|')}]",
-        "MODALIDAD": "[${VALORES_VALIDOS["MODALIDAD"].map(v => `"${v}"`).join('|')}]",
-        "ARMA": "[${VALORES_VALIDOS["ARMA"].map(v => `"${v}"`).join('|')}]",
-        "LESIONADA": "[${VALORES_VALIDOS["LESIONADA"].map(v => `"${v}"`).join('|')}]",
-        "VICTIMA": "[${VALORES_VALIDOS["VICTIMA"].map(v => `"${v}"`).join('|')}]",
-        "IMPUTADO": "[${VALORES_VALIDOS["IMPUTADO"].map(v => `"${v}"`).join('|')}]",
-        "MAYOR O MENOR": "[${VALORES_VALIDOS["MAYOR O MENOR"].map(v => `"${v}"`).join('|')}]",
-        "JURISDICCION": "[${VALORES_VALIDOS["JURISDICCION"].map(v => `"${v}"`).join('|')}]",
-        "LUGAR": "[${VALORES_VALIDOS["LUGAR"].map(v => `"${v}"`).join('|')}]",
-        "TENTATIVA": "[${VALORES_VALIDOS["TENTATIVA"].map(v => `"${v}"`).join('|')}]",
-        "OBSERVACION": "[${VALORES_VALIDOS["OBSERVACION"].map(v => `"${v}"`).join('|')}]",
-        "FRECUENCIA": "[${VALORES_VALIDOS["FRECUENCIA"].map(v => `"${v}"`).join('|')}]"
-      }
-      `; // Fin del prompt
+      LISTA DE VALORES VÁLIDOS POR CAMPO (elige uno EXACTO, en MAYÚSCULAS):
+      "CALIFICACION LEGAL": [${VALORES_VALIDOS["CALIFICACION LEGAL"].map(v => `"${v}"`).join(', ')}]
+      "MODALIDAD": [${VALORES_VALIDOS["MODALIDAD"].map(v => `"${v}"`).join(', ')}]
+      "ARMA": [${VALORES_VALIDOS["ARMA"].map(v => `"${v}"`).join(', ')}]
+      "LESIONADA": [${VALORES_VALIDOS["LESIONADA"].map(v => `"${v}"`).join(', ')}]
+      "VICTIMA": [${VALORES_VALIDOS["VICTIMA"].map(v => `"${v}"`).join(', ')}]
+      "IMPUTADO": [${VALORES_VALIDOS["IMPUTADO"].map(v => `"${v}"`).join(', ')}]
+      "MAYOR O MENOR": [${VALORES_VALIDOS["MAYOR O MENOR"].map(v => `"${v}"`).join(', ')}]
+      "JURISDICCION": [${VALORES_VALIDOS["JURISDICCION"].map(v => `"${v}"`).join(', ')}]
+      "LUGAR": [${VALORES_VALIDOS["LUGAR"].map(v => `"${v}"`).join(', ')}]
+      "TENTATIVA": [${VALORES_VALIDOS["TENTATIVA"].map(v => `"${v}"`).join(', ')}]
+      "OBSERVACION": [${VALORES_VALIDOS["OBSERVACION"].map(v => `"${v}"`).join(', ')}]
+      "FRECUENCIA": [${VALORES_VALIDOS["FRECUENCIA"].map(v => `"${v}"`).join(', ')}]
+      `;
+
+      // logEntries.push(`  Prompt enviado a IA:\n${prompt}\n`); // Para depuración, puedes descomentar esto.
 
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
 
+      logEntries.push(`  Respuesta Cruda de IA recibida:\n  "${text.replace(/\n/g, '\\n')}"\n`);
+
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      let classifiedByIA: ClasificacionLegal = { ...CLASIFICACION_DEFAULT }; // Esto es lo que la IA devuelve
+      let classifiedByIA: any = {};
       let errorParsing = false;
 
       if (jsonMatch && jsonMatch[0]) {
         try {
-          const parsed = JSON.parse(jsonMatch[0]);
-          classifiedByIA = validateAndCleanClassification(parsed); // Validar la salida de la IA
+          classifiedByIA = JSON.parse(jsonMatch[0]);
         } catch (parseError) {
           errorParsing = true;
           console.error(`Error al parsear JSON de la IA para fila ${i + 2}:`, parseError);
-          baseProcessedRow.errorMessage = `Error al parsear JSON de IA: ${parseError}`;
+          baseProcessedRow.errorMessage = `Error al parsear JSON de IA: ${parseError.message || parseError}`;
         }
       } else {
         errorParsing = true;
         baseProcessedRow.errorMessage = "La IA no devolvió un JSON válido o no se encontró JSON en la respuesta.";
       }
 
-      // Combinar los datos originales del Excel con la clasificación validada de la IA
-      // La baseProcessedRow.classification ya tiene los datos originales y defaults
-      // Ahora sobrescribimos los campos que clasifica la IA con lo que la IA devolvió (validado).
-      const finalClassificationResult: ClasificacionLegal = {
-          ...baseProcessedRow.classification, // Mantiene los datos originales del Excel y los defaults
-          ...classifiedByIA // Sobrescribe con los resultados de la IA (ya validados)
-      };
+      const validatedIAClassification = validateAndCleanClassification(classifiedByIA, logEntries);
 
+      for (const key of IA_CLASSIFICATION_KEYS) {
+          baseProcessedRow.classification[key] = validatedIAClassification[key];
+      }
+      
       classifiedData.push({
         ...baseProcessedRow,
-        classification: finalClassificationResult, // Usamos el resultado combinado
         errorMessage: errorParsing ? baseProcessedRow.errorMessage : undefined
       });
 
-      logEntries.push(`Fila ${i + 2}: Procesado con IA`);
-      logEntries.push(`Relato: "${relato}"`);
-      logEntries.push(`Respuesta cruda de IA: "${text.replace(/\n/g, '\\n')}"`);
-      logEntries.push(`Clasificación final (IA + Originales): ${JSON.stringify(finalClassificationResult, null, 2)}`);
+      logEntries.push(`  >>> RESULTADO: Procesado con IA. <<<\n`);
+      logEntries.push(`  Clasificación Final Validada:\n${JSON.stringify(classifiedData[classifiedData.length -1].classification, null, 2)}\n`);
       if (classifiedData[classifiedData.length -1].errorMessage) {
-        logEntries.push(`ATENCIÓN: ${classifiedData[classifiedData.length -1].errorMessage}`);
+        logEntries.push(`    [!!!] ERROR EN FILA: ${classifiedData[classifiedData.length -1].errorMessage}\n`);
       }
-      logEntries.push('---\n');
+      logEntries.push(`-----------------------------------------------------------------\n`);
 
     } catch (error: any) {
       console.error(`Error general al procesar fila ${i + 2} con IA:`, error);
       classifiedData.push({
         ...baseProcessedRow,
-        classification: { ...CLASIFICACION_DEFAULT }, // En caso de error, usar solo los defaults
+        classification: {
+            ...baseProcessedRow.classification,
+            ...CLASIFICACION_DEFAULT
+        },
         errorMessage: `Error de IA: ${error.message || error}`
       });
-      logEntries.push(`Fila ${i + 2}: ERROR DE IA - ${error.message || error}`);
-      logEntries.push('---\n');
+      logEntries.push(`  >>> RESULTADO: ERROR GENERAL DE IA - ${error.message || error} <<<\n`);
+      logEntries.push(`  Clasificación Final (Usando solo Originales y Defaults):\n${JSON.stringify(classifiedData[classifiedData.length -1].classification, null, 2)}\n`);
+      logEntries.push(`-----------------------------------------------------------------\n`);
+    }
+
+    if ((i + 1) % REQUESTS_PER_BATCH === 0 && i < rows.length - 1) {
+      logEntries.push(`\n[ PAUSA: Esperando ${DELAY_BETWEEN_BATCHES_MS / 1000} segundos para respetar la cuota de la API. (Después de ${i + 1} filas) ]\n\n`);
+      await delay(DELAY_BETWEEN_BATCHES_MS);
     }
   }
 
+  logEntries.push(`\n=================================================================\n`);
+  logEntries.push(`= PROCESAMIENTO CON IA FINALIZADO (${classifiedData.length} filas) =\n`);
+  logEntries.push(`=================================================================\n`);
+
   return {
     classifiedData,
-    log: logEntries.join('\n')
+    log: logEntries.join('')
   };
 }
 
-// Función para descargar el Excel clasificado
-export function downloadExcel(data: ProcessedRowData[], filename = "Clasificado IA.xlsx"): Blob {
-  // Mapear los datos clasificados para que coincidan con los encabezados de salida del Excel
-  const dataToExport = data.map(row => {
-    const newRow: { [key: string]: any } = {};
+export async function downloadExcel(data: ProcessedRowData[], filename = "Clasificado IA.xlsx", templateFile: File | null): Promise<void> {
+  let workbook: XLSX.WorkBook;
+  let sheetName: string;
+  let startRow: number;
+  const HEADER_ROW_COUNT = 2;
+
+  if (templateFile) {
+    try {
+      workbook = await readBinaryExcelTemplate(templateFile);
+      sheetName = workbook.SheetNames[0];
+      startRow = HEADER_ROW_COUNT + 1;
+    } catch (e: any) {
+      console.error("Error al leer la plantilla Excel para descarga:", e);
+      alert("Error al leer la plantilla Excel. Se generará un Excel básico sin formato.");
+      workbook = XLSX.utils.book_new();
+      sheetName = 'Clasificado';
+      startRow = 1;
+    }
+  } else {
+    workbook = XLSX.utils.book_new();
+    sheetName = 'Clasificado';
+    startRow = 1;
+  }
+
+  const currentSheet = workbook.Sheets[sheetName];
+  if (!currentSheet) {
+    workbook.Sheets[sheetName] = XLSX.utils.json_to_sheet([]);
+    const ws = workbook.Sheets[sheetName];
+    XLSX.utils.sheet_add_aoa(ws, [EXCEL_OUTPUT_HEADERS], { origin: -1 });
+  }
+
+  const dataToAppend = data.map(row => {
+    const newRow: { [keyof ClasificacionLegal]: any } = {} as ClasificacionLegal;
     for (const header of EXCEL_OUTPUT_HEADERS) {
-      // Priorizamos los valores de la propiedad 'classification' (que ya incluye IA + originales)
-      // Asegúrate de que todos los campos en EXCEL_OUTPUT_HEADERS estén presentes en ClasificacionLegal
       newRow[header] = row.classification[header] !== undefined ? row.classification[header] : '';
     }
     return newRow;
   });
 
-  const newSheet = XLSX.utils.json_to_sheet(dataToExport, { header: EXCEL_OUTPUT_HEADERS });
-  const newWB = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(newWB, newSheet, 'Clasificado');
-  const wbout = XLSX.write(newWB, { bookType: 'xlsx', type: 'array' });
-  return new Blob([wbout], { type: 'application/octet-stream' });
+  XLSX.utils.sheet_add_json(workbook.Sheets[sheetName]!, dataToAppend, {
+    header: EXCEL_OUTPUT_HEADERS,
+    skipHeader: templateFile ? true : false,
+    origin: templateFile ? startRow -1 : 0,
+    cellDates: true
+  });
+
+  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  saveAs(new Blob([wbout], { type: 'application/octet-stream' }), filename);
 }
 
-// Función para descargar el Log
-export function downloadLog(logText: string, filename = "Clasificador IA LOG.txt"): Blob {
+export function downloadLog(logText: string, filename = "Clasificador LOG IA.txt"): Blob {
   return new Blob([logText], { type: 'text/plain;charset=utf-8' });
 }

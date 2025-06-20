@@ -1,40 +1,93 @@
+// src/types.ts
+
 export enum AppStep {
   UPLOAD = 'UPLOAD',
   PROCESSING = 'PROCESSING',
   RESULTS = 'RESULTS',
 }
 
-// Interfaz para las clasificaciones legales, incluyendo TODAS las columnas de la plantilla DELEGACION.xlsx
-// y el orden sugerido por tu jefe. Las claves deben coincidir EXACTAMENTE con los encabezados de Excel.
+// Interfaz que representa la estructura final de UNA FILA en el Excel de salida.
+// Las claves deben coincidir EXACTAMENTE con los encabezados de DELEGACION.xlsx - Sheet1.csv.
+// Las que la IA clasifica son las "violetas", las otras se copian del original.
 export interface ClasificacionLegal {
-  "NRO": string; // Esta es la columna "NRO" de tu plantilla original, a rellenar por el dato original
-  "FECHA DE INICIO DE ACTUACIONES": string;
-  "NRO ACTUACION POLICIAL": string;
-  "CARATULA": string;
-  "RELATO": string; // El relato original del Excel, importante para mantenerlo en la salida
-  "CALIFICACION LEGAL": string;
-  "MODALIDAD": string;
-  "ARMA": string;
-  "LESIONADA": string;
-  "VICTIMA": string;
-  "IMPUTADO": string;
-  "MAYOR O MENOR": string;
-  "JURISDICCION": string;
-  "LUGAR": string;
-  "TENTATIVA": string;
-  "OBSERVACION": string;
-  "FRECUENCIA": string; // Columna "FRECUENCIA" de la plantilla, si existe.
+  "id_hecho"?: string; // Columna del Excel original
+  "nro_registro"?: string; // Columna del Excel original
+  "ipp"?: string; // Columna del Excel original
+  "fecha_carga"?: string; // Columna del Excel original
+  "hora_carga"?: string; // Columna del Excel original
+  "dependencia"?: string; // Columna del Excel original
+  "fecha_inicio_hecho"?: string; // Columna del Excel original
+  "hora_inicio_hecho"?: string; // Columna del Excel original
+  "partido_hecho"?: string; // Columna del Excel original
+  "localidad_hecho"?: string; // Columna del Excel original
+  "latitud"?: string; // Columna del Excel original
+  "calle"?: string; // Columna del Excel original
+  "longitud"?: string; // Columna del Excel original
+  "altura"?: string; // Columna del Excel original
+  "entre"?: string; // Columna del Excel original
+  "calificaciones"?: string; // Columna del Excel original (Carátula/Tipo de delito original)
+  "relato"?: string; // Columna del Excel original
+  "JURISDICCIÓN": string; // Clasificada por IA (con tilde)
+  "CALIFICACIÓN": string; // Clasificada por IA (con tilde)
+  "MODALIDAD": string; // Clasificada por IA
+  "VICTIMA/S": string; // Clasificada por IA (con /S)
+  "NO": string; // Columna "NO" entre Victima/Imputado en DELEGACION.xlsx, se copiará vacía o un guión.
+  "IMPUTADOS": string; // Clasificada por IA
+  "MENOR/MAYOR": string; // Clasificada por IA
+  "ARMAS": string; // Clasificada por IA
+  "LUGAR": string; // Clasificada por IA
+  "TENTATIVA": string; // Clasificada por IA
+  "OBSERVACIÓN": string; // Clasificada por IA (con tilde)
+  "FRECUENCIA"?: string; // Columna "FRECUENCIA" de la plantilla, si existe.
   // Asegúrate de que no haya otras columnas en DELEGACION.xlsx que necesiten ser mapeadas aquí
 }
 
-// Valores válidos según la REFERENCIAS.docx y listas desplegables de DELEGACION.xlsx.
-// Estos son CRÍTICOS para el prompt de la IA y la validación.
-export const VALORES_VALIDOS = {
+// Mapeo entre las claves internas que la IA usará en su JSON y las claves EXACTAS del Excel (con caracteres especiales/exactas)
+// Esto es para que el prompt de la IA trabaje con nombres de campo más sencillos (sin tildes/espacios/plurales si se desea),
+// pero la salida final de Excel y la validación usen los nombres exactos de la plantilla.
+export const DISPLAY_TO_INTERNAL_KEY_MAP: Record<keyof ClasificacionLegal, string> = {
+  "id_hecho": "id_hecho",
+  "nro_registro": "nro_registro",
+  "ipp": "ipp",
+  "fecha_carga": "fecha_carga",
+  "hora_carga": "hora_carga",
+  "dependencia": "dependencia",
+  "fecha_inicio_hecho": "fecha_inicio_hecho",
+  "hora_inicio_hecho": "hora_inicio_hecho",
+  "partido_hecho": "partido_hecho",
+  "localidad_hecho": "localidad_hecho",
+  "latitud": "latitud",
+  "calle": "calle",
+  "longitud": "longitud",
+  "altura": "altura",
+  "entre": "entre",
+  "calificaciones": "calificaciones",
+  "relato": "relato",
+  "JURISDICCIÓN": "JURISDICCION", // Mapea "JURISDICCIÓN" (Excel) a "JURISDICCION" (interno IA)
+  "CALIFICACIÓN": "CALIFICACION LEGAL", // Mapea "CALIFICACIÓN" (Excel) a "CALIFICACION LEGAL" (interno IA)
+  "MODALIDAD": "MODALIDAD",
+  "VICTIMA/S": "VICTIMA", // Mapea "VICTIMA/S" (Excel) a "VICTIMA" (interno IA)
+  "NO": "NO",
+  "IMPUTADOS": "IMPUTADO", // Mapea "IMPUTADOS" (Excel) a "IMPUTADO" (interno IA)
+  "MENOR/MAYOR": "MAYOR O MENOR",
+  "ARMAS": "ARMA", // Mapea "ARMAS" (Excel) a "ARMA" (interno IA)
+  "LUGAR": "LUGAR",
+  "TENTATIVA": "TENTATIVA",
+  "OBSERVACIÓN": "OBSERVACION", // Mapea "OBSERVACIÓN" (Excel) a "OBSERVACION" (interno IA)
+  "FRECUENCIA": "FRECUENCIA"
+};
+
+
+// Valores válidos para las COLUMNAS CLASIFICADAS POR IA.
+// ¡Estos valores deben coincidir EXACTAMENTE con las opciones de tus listas desplegables en DELEGACION.xlsx - Hoja1.csv
+// y con las referencias del documento! Si hay tildes o mayúsculas/minúsculas, deben ser exactas.
+// Las claves aquí son los nombres INTERNOS que usa la IA en su JSON (los valores del mapeo).
+export const VALORES_VALIDOS: { [key: string]: string[] } = {
   "CALIFICACION LEGAL": [
     "ROBO", "HURTO", "LESIONES", "HOMICIDIO", "USURPACION",
     "ABUSO SEXUAL", "LEY 23737", "ABIGEATO", "ESTAFAS",
     "ABUSO DE ARMAS", "TENENCIA DE ARMAS", "PORTACION DE ARMAS",
-    "ENCUBRIMIENTO", "NINGUNO DE INTERÉS", "OTROS" // Agregué "OTROS" por si acaso, si no existe eliminar
+    "ENCUBRIMIENTO", "NINGUNO DE INTERÉS", "OTROS" // "OTROS" agregado
   ],
   "MODALIDAD": [
     "ASALTO", "MOTOCHORRO", "ENTRADERA", "VIOLENCIA DE GÉNERO",
@@ -47,16 +100,16 @@ export const VALORES_VALIDOS = {
     "TENENCIA DE ARMAS", "PORTACION DE ARMAS", "ENCUBRIMIENTO", "NO ESPECIFICADO"
   ],
   "ARMA": ["FUEGO", "BLANCA", "IMPROPIA", "NO ESPECIFICADO"],
-  "LESIONADA": ["SI", "NO"], // Según REFERENCIAS.docx
+  "LESIONADA": ["SI", "NO"], // REFERENCIAS.docx dice solo SI o NO
   "VICTIMA": ["MASCULINO", "FEMENINO", "AMBOS", "NO ESPECIFICADO"],
   "IMPUTADO": ["MASCULINO", "FEMENINO", "AMBOS", "NO ESPECIFICADO"],
   "MAYOR O MENOR": ["MAYOR", "MENOR", "AMBOS", "NO ESPECIFICADO"],
-  "JURISDICCION": [
+  "JURISDICCION": [ // Lista larga, debe ser exacta de DELEGACION.xlsx - Hoja1.csv
     "JOSÉ C. PAZ", "SAN MIGUEL", "MALVINAS ARGENTINAS", "PILAR", "TRES DE FEBRERO",
     "MORENO", "RODRIGUEZ", "GENERAL PAZ", "NAVARRO", "MERCEDES", "SUIPACHA",
     "LUJAN", "GENERAL LAS HERAS", "MARCOS PAZ", "GENERAL RODRÍGUEZ",
     "EXALTACIÓN DE LA CRUZ", "CAMPANA", "ZÁRATE", "ESCOBAR", "TIGRE",
-    "SAN FERNANDO", "VICENTE LÓPEZ", "SAN ISIDRO", "SAN MARTIN",
+    "SAN FERNANDO", "VICENTE LÓPEZ", "SAN ISIDRO", "SAN MARTIN", // SAN MARTIN (sin tilde aquí)
     "HURLINGHAM", "ITUZAINGÓ", "MERLO", "MORÓN", "LA MATANZA",
     "EZEIZA", "ESTEBAN ECHEVERRÍA", "LANÚS", "LOMAS DE ZAMORA", "AVELLANEDA",
     "QUILMES", "BERAZATEGUI", "FLORENCIO VARELA", "LA PLATA", "ENSENADA",
@@ -68,57 +121,62 @@ export const VALORES_VALIDOS = {
     "FINCA", "VÍA PÚBLICA", "COMERCIO", "ESTABLECIMIENTO EDUCATIVO",
     "TRANSPORTE PÚBLICO", "BANCO", "HOSPITAL", "OTRO", "NO ESPECIFICADO"
   ],
-  "TENTATIVA": ["SI", "NO"], // Según REFERENCIAS.docx
-  "OBSERVACION": ["NO ESPECIFICADO"], // Asumo que si no hay info se usa esto. Si es texto libre, eliminar de VALORES_VALIDOS
-  "FRECUENCIA": ["DIARIA", "SEMANAL", "MENSUAL", "OCASIONAL", "NO ESPECIFICADO"] // Asumo valores, si hay lista en DELEGACION.xlsx, usar esa.
+  "TENTATIVA": ["SI", "NO"],
+  "OBSERVACION": ["NO ESPECIFICADO"], // Si es texto libre, este valor no debería ser una lista. Por ahora lo mantengo como lista con "NO ESPECIFICADO"
+  "FRECUENCIA": ["DIARIA", "SEMANAL", "MENSUAL", "OCASIONAL", "NO ESPECIFICADO"]
 };
 
-// Clasificación por defecto actualizada con todas las columnas de ClasificacionLegal
-// Los campos que NO son clasificados por IA (como NRO, FECHA, NRO ACTUACION, CARATULA, RELATO)
-// deben inicializarse con un string vacío porque se rellenarán con los datos originales del Excel.
+// Valores por defecto para todas las columnas de clasificación.
+// Las claves son las de 'ClasificacionLegal' (los nombres EXACTOS del Excel)
 export const CLASIFICACION_DEFAULT: ClasificacionLegal = {
-  "NRO": "",
-  "FECHA DE INICIO DE ACTUACIONES": "",
-  "NRO ACTUACION POLICIAL": "",
-  "CARATULA": "",
-  "RELATO": "",
-  "CALIFICACION LEGAL": "NINGUNO DE INTERÉS",
+  "id_hecho": "",
+  "nro_registro": "",
+  "ipp": "",
+  "fecha_carga": "",
+  "hora_carga": "",
+  "dependencia": "",
+  "fecha_inicio_hecho": "",
+  "hora_inicio_hecho": "",
+  "partido_hecho": "",
+  "localidad_hecho": "",
+  "latitud": "",
+  "calle": "",
+  "longitud": "",
+  "altura": "",
+  "entre": "",
+  "calificaciones": "",
+  "relato": "",
+  "JURISDICCIÓN": "NO ESPECIFICADO",
+  "CALIFICACIÓN": "NINGUNO DE INTERÉS",
   "MODALIDAD": "NO ESPECIFICADO",
   "ARMA": "NO ESPECIFICADO",
   "LESIONADA": "NO",
-  "VICTIMA": "NO ESPECIFICADO",
-  "IMPUTADO": "NO ESPECIFICADO",
-  "MAYOR O MENOR": "NO ESPECIFICADO",
-  "JURISDICCION": "NO ESPECIFICADO",
+  "VICTIMA/S": "NO ESPECIFICADO",
+  "IMPUTADOS": "NO ESPECIFICADO",
+  "MENOR/MAYOR": "NO ESPECIFICADO",
   "LUGAR": "NO ESPECIFICADO",
   "TENTATIVA": "NO",
-  "OBSERVACION": "NO ESPECIFICADO",
+  "OBSERVACIÓN": "NO ESPECIFICADO",
   "FRECUENCIA": "NO ESPECIFICADO"
 };
 
-// Interface para filas del Excel original (permite cualquier columna)
-// Si el Excel tiene una columna 'relato' o 'RELATO', se usará esa.
 export interface FilaExcel {
-  [key: string]: any;
+  [key: string]: string | number | boolean | undefined;
 }
 
-// Fila clasificada extendida, incluye la clasificación y metadatos de procesamiento.
 export interface FilaClasificada extends FilaExcel, ClasificacionLegal {
   indiceOriginal?: number;
   error?: string;
 }
 
-// Interfaz para los datos procesados que ResultsDisplay espera.
-// Contiene la fila original, la clasificación de IA/legal y metadatos de error/display.
 export interface ProcessedRowData {
-  originalIndex: number; // Índice original para la tabla (base 0)
-  originalRowData: FilaExcel; // Mantener la fila original completa aquí
-  classification: ClasificacionLegal; // La clasificación obtenida (IA o por defecto), ya con todos los campos
-  RELATO_NORMALIZED_VALUE: string; // El relato limpio para mostrar en la vista previa
-  errorMessage?: string; // Mensaje de error si lo hubo
+  originalIndex: number;
+  originalRowData: FilaExcel;
+  classification: ClasificacionLegal;
+  RELATO_NORMALIZED_VALUE: string;
+  errorMessage?: string;
 }
 
-// Props para componentes de modales
 export interface ConfirmationModalProps {
   isOpen: boolean;
   title: string;
@@ -129,64 +187,89 @@ export interface ConfirmationModalProps {
   cancelText?: string;
 }
 
-// Columnas que la IA es responsable de clasificar.
-// Son un subconjunto de ClasificacionLegal, las que NO son del Excel original
+// Las claves que la IA debería intentar clasificar.
+// Estas deben ser los nombres EXACTOS de las columnas en el Excel (displayKeys).
+// El mapeo a claves internas (sin tildes, etc.) se hace vía DISPLAY_TO_INTERNAL_KEY_MAP.
 export const IA_CLASSIFICATION_KEYS: (keyof ClasificacionLegal)[] = [
-  "CALIFICACION LEGAL",
+  "JURISDICCIÓN", // Clave de Excel con tilde
+  "CALIFICACIÓN", // Clave de Excel con tilde
   "MODALIDAD",
-  "ARMA",
-  "LESIONADA",
-  "VICTIMA",
-  "IMPUTADO",
-  "MAYOR O MENOR",
-  "JURISDICCION",
+  "VICTIMA/S", // Clave de Excel con /S
+  "IMPUTADOS", // Clave de Excel con plural
+  "MENOR/MAYOR", // Clave de Excel con /
+  "ARMAS", // Clave de Excel con plural
   "LUGAR",
   "TENTATIVA",
-  "OBSERVACION",
+  "OBSERVACIÓN", // Clave de Excel con tilde
   "FRECUENCIA"
 ];
 
-// Encabezados en el ORDEN EXACTO en que deben aparecer en el archivo Excel final.
-// ¡Este orden DEBE COINCIDIR con el orden de tu plantilla DELEGACION.xlsx!
+// Encabezados para la exportación final del Excel.
+// ¡Este orden DEBE COINCIDIR EXACTAMENTE con el orden de las columnas en tu plantilla DELEGACION.xlsx - Sheet1.csv!
+// Y las claves deben ser los nombres EXACTOS de las columnas en la plantilla.
 export const EXCEL_OUTPUT_HEADERS: (keyof ClasificacionLegal)[] = [
-  "NRO",
-  "FECHA DE INICIO DE ACTUACIONES",
-  "NRO ACTUACION POLICIAL",
-  "CARATULA",
-  "RELATO", // El relato original debe ir aquí en el Excel
-  "CALIFICACION LEGAL",
+  "id_hecho",
+  "nro_registro",
+  "ipp",
+  "fecha_carga",
+  "hora_carga",
+  "dependencia",
+  "fecha_inicio_hecho",
+  "hora_inicio_hecho",
+  "partido_hecho",
+  "localidad_hecho",
+  "latitud",
+  "calle",
+  "longitud",
+  "altura",
+  "entre",
+  "calificaciones", // Esta es la columna 'caratula' original, no la de IA
+  "relato", // El relato original
+  "JURISDICCIÓN",
+  "CALIFICACIÓN",
   "MODALIDAD",
-  "ARMA",
-  "LESIONADA",
-  "VICTIMA",
-  "IMPUTADO",
-  "MAYOR O MENOR",
-  "JURISDICCION",
+  "VICTIMA/S",
+  "NO", // Columna "NO" del template
+  "IMPUTADOS",
+  "MENOR/MAYOR",
+  "ARMAS",
   "LUGAR",
   "TENTATIVA",
-  "OBSERVACION",
+  "OBSERVACIÓN",
   "FRECUENCIA"
 ];
 
-// Etiquetas para mostrar en la tabla de la UI (ResultsDisplay)
-// Usamos las mismas claves que EXCEL_OUTPUT_HEADERS para consistencia,
-// pero puedes personalizar las etiquetas de display.
+// Etiquetas para mostrar en la tabla de la UI (ResultsDisplay).
+// Mapea los nombres exactos de las columnas de Excel a etiquetas más amigables si es necesario.
 export const CLASSIFICATION_LABELS: Record<keyof ClasificacionLegal, string> = {
-  "NRO": "Nro. Acta",
-  "FECHA DE INICIO DE ACTUACIONES": "Fecha Inicio",
-  "NRO ACTUACION POLICIAL": "Nro. Actuación",
-  "CARATULA": "Carátula Original",
-  "RELATO": "Relato (Original)",
-  "CALIFICACION LEGAL": "Calificación Legal",
+  "id_hecho": "ID Hecho",
+  "nro_registro": "Nro Registro",
+  "ipp": "IPP",
+  "fecha_carga": "Fecha Carga",
+  "hora_carga": "Hora Carga",
+  "dependencia": "Dependencia",
+  "fecha_inicio_hecho": "Fecha Inicio Hecho",
+  "hora_inicio_hecho": "Hora Inicio Hecho",
+  "partido_hecho": "Partido Hecho",
+  "localidad_hecho": "Localidad Hecho",
+  "latitud": "Latitud",
+  "calle": "Calle",
+  "longitud": "Longitud",
+  "altura": "Altura",
+  "entre": "Entre Calles",
+  "calificaciones": "Carátula Original",
+  "relato": "Relato Original",
+  "JURISDICCIÓN": "Jurisdicción",
+  "CALIFICACIÓN": "Calificación Legal",
   "MODALIDAD": "Modalidad",
   "ARMA": "Arma",
   "LESIONADA": "¿Lesionada?",
-  "VICTIMA": "Víctima",
-  "IMPUTADO": "Imputado",
-  "MAYOR O MENOR": "Mayor/Menor",
-  "JURISDICCION": "Jurisdicción",
+  "VICTIMA/S": "Víctima(s)",
+  "IMPUTADOS": "Imputado(s)",
+  "MENOR/MAYOR": "Mayor/Menor",
   "LUGAR": "Lugar",
   "TENTATIVA": "Tentativa",
-  "OBSERVACION": "Observación",
-  "FRECUENCIA": "Frecuencia"
+  "OBSERVACIÓN": "Observación",
+  "FRECUENCIA": "Frecuencia",
+  "NO": "Columna Vacía"
 };

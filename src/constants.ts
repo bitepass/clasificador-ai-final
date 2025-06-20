@@ -1,15 +1,25 @@
-// Modelo Gemini actualizado
-// Probando con 'gemini-1.5-flash-latest' como alternativa debido al error 404 con gemini-1.0-pro.
-// Este es un modelo flash más reciente, optimizado para ser rápido y eficiente.
-export const GEMINI_MODEL_NAME = 'gemini-1.5-flash-latest'; // ¡CAMBIO AQUI!
+// src/constants.ts
 
-// Columna que contiene el relato
-export const RELATO_COLUMN_KEYWORDS = ['RELATO', 'relato', 'Relato'];
+// Modelo Gemini actualizado
+export const GEMINI_MODEL_NAME = 'gemini-1.5-flash-latest';
+
+// Columna que contiene el relato - ¡Ampliamos las palabras clave!
+// Incluimos variaciones comunes en Excel, con/sin tilde, plurales, y errores.
+export const RELATO_COLUMN_KEYWORDS = [
+  'RELATO', 'relato', 'Relato', // Ya existentes
+  'RELATOS', 'relatos', // Plural
+  'RELATÓ', 'relató', // Con tilde
+  'RLATO', 'rlato', // Errores comunes
+  'DESCRIPCION', 'descripcion', 'Descripcion', // Alternativas comunes
+  'HECHOS', 'hechos', 'Hechos', // Otra alternativa
+  'CUERPO DEL RELATO', 'cuerpo del relato', // Si el encabezado es más largo
+];
+
 
 // Clasificación por defecto (compatible con tu lógica actual)
 export const DEFAULT_CLASSIFICATION = {
   "CALIFICACION LEGAL": "NINGUNO DE INTERÉS",
-  "MODALIDAD": "NO ESPECIFICADO", 
+  "MODALIDAD": "NO ESPECIFICADO",
   "ARMA": "NO ESPECIFICADO",
   "LESIONADA": "NO",
   "VICTIMA": "NO ESPECIFICADO",
