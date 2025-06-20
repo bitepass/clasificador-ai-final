@@ -5,7 +5,7 @@ import { XIcon } from './icons/XIcon';
 interface ProcessingViewProps {
   progress: number;
   message: string;
-  estimatedTime: string; // Ahora pasamos el tiempo estimado directamente
+  estimatedTime: string;
   onCancel: () => void;
 }
 
@@ -17,7 +17,7 @@ export const ProcessingView: React.FC<ProcessingViewProps> = ({ progress, messag
         Procesando...
       </h2>
       <p className="text-slate-300 mb-2">{message}</p>
-      <p className="text-sm text-sky-300 mb-4">{estimatedTime}</p> {/* Mostrar el tiempo estimado */}
+      <p className="text-sm text-sky-300 mb-4">{estimatedTime}</p>
 
       <div className="w-full bg-slate-700 rounded-full h-6 overflow-hidden shadow-inner mb-6">
         <div

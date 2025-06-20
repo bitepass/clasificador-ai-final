@@ -1,5 +1,5 @@
 import React from 'react';
-import { ProcessedRowData, EXCEL_OUTPUT_HEADERS, CLASSIFICATION_LABELS, IA_CLASSIFICATION_KEYS } from '../types';
+import { ProcessedRowData, EXCEL_OUTPUT_HEADERS, CLASSIFICATION_LABELS } from '../types';
 import { DownloadIcon } from './icons/DownloadIcon';
 import { RotateCcwIcon } from './icons/RotateCcwIcon';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
@@ -66,10 +66,9 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
             <thead className="bg-slate-700 sticky top-10 z-10">
               <tr>
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider"># Original</th>
-                {/* Usar EXCEL_OUTPUT_HEADERS para mostrar todas las columnas en el orden correcto */}
                 {EXCEL_OUTPUT_HEADERS.map(key => (
                   <th key={key} scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider">
-                    {CLASSIFICATION_LABELS[key] || key} {/* Usa la etiqueta si existe, sino el nombre de la clave */}
+                    {CLASSIFICATION_LABELS[key] || key}
                   </th>
                 ))}
                 <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-sky-300 uppercase tracking-wider">Error IA</th>
@@ -81,13 +80,8 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-300">{row.originalIndex + 1}</td>
                   {EXCEL_OUTPUT_HEADERS.map(key => (
                     <td key={key} className="px-4 py-3 whitespace-nowrap text-sm text-slate-300 truncate max-w-xs"
-                        title={key === "RELATO" ? row.RELATO_NORMALIZED_VALUE : (row.classification[key] || row[key] || '-')}>
-                      {
-                        key === "RELATO" ?
-                          (row.RELATO_NORMALIZED_VALUE ? `${row.RELATO_NORMALIZED_VALUE.substring(0, 50)}...` : 'N/A')
-                        :
-                        (row.classification[key] || row[key] || '-') // Mostrar clasificación de IA, o valor original de la fila
-                      }
+                        title={row.classification && row.classification[key] !== undefined ? String(row.classification[key]) : '-'}>
+                      {row.classification && row.classification[key] !== undefined ? String(row.classification[key]) : '-'}
                     </td>
                   ))}
                   <td className="px-4 py-3 whitespace-nowrap text-sm text-red-400">{row.errorMessage && row.errorMessage !== "Relato vacío, usando valores por defecto." ? row.errorMessage : '-'}</td>
@@ -106,7 +100,7 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, onDownl
           className="flex items-center justify-center w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:cursor-not-allowed text-white font-semibold py-3 px-6 rounded-lg shadow-md transition-colors duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-opacity-50"
         >
           <DownloadIcon className="h-5 w-5 mr-2" />
-          Descargar Excel Clasificado
+          Descargar Excel Clasificado (IA)
         </button>
         <button
           onClick={onDownloadLog}

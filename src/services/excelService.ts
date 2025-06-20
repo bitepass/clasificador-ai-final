@@ -1,13 +1,13 @@
+// src/services/excelService.ts
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import {
   ClasificacionLegal, CLASIFICACION_DEFAULT, FilaExcel, ProcessedRowData,
-  VALORES_VALIDOS, EXCEL_OUTPUT_HEADERS, IA_CLASSIFICATION_KEYS
-} from '../types';
+  VALORES_VALIDOS, EXCEL_OUTPUT_HEADERS, IA_CLASSIFICATION_KEYS, CLASSIFICATION_LABELS
+} from '../types'; // Importar CLASSIFICATION_LABELS
 import { ARTICULOS_CODIGO_PENAL, RELATO_COLUMN_KEYWORDS } from '../constants';
-import { readExcelFile as genericReadExcelFile } from './geminiService'; // Importar readExcelFile genérico
+import { readExcelFile as genericReadExcelFile } from './geminiService';
 
-// Función para leer un archivo Excel BINARIO (como una plantilla con formato)
 async function readBinaryExcelTemplate(file: File): Promise<XLSX.WorkBook> {
   const data = await file.arrayBuffer();
   const workbook = XLSX.read(data, { type: 'array', cellStyles: true });
@@ -72,9 +72,9 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
         clasificacion["MODALIDAD"] = "ENTRADERA";
       } else if (r.includes("asalto en finca") || (r.includes("finca") && (r.includes("asalto") || r.includes("robo")))) {
         clasificacion["MODALIDAD"] = "ASALTO EN FINCA"; // ASALTO EN FINCA (agregado)
-      } else if (r.includes("asalto en via publica") || (r.includes("via publica") && (r.includes("asalto") || r.includes("robo")))) {
+      } else if (r.includes("asalto en via publica") || (r.includes("via publica") && r.includes("asalto"))) {
         clasificacion["MODALIDAD"] = "ASALTO EN VÍA PÚBLICA"; // ASALTO EN VÍA PÚBLICA (agregado)
-      } else if (r.includes("asalto en comercio") || (r.includes("comercio") && (r.includes("asalto") || r.includes("robo")))) {
+      } else if (r.includes("asalto en comercio") || (r.includes("comercio") && r.includes("asalto"))) {
         clasificacion["MODALIDAD"] = "ASALTO EN COMERCIO"; // ASALTO EN COMERCIO (agregado)
       } else if (r.includes("robacables") || r.includes("robo de cables")) {
         clasificacion["MODALIDAD"] = "ROBACABLES";
@@ -160,15 +160,13 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
     }
   }
   // Enfrentamientos - Si son una calificación legal separada, agregar aquí.
-  // Si son solo modalidad de Homicidio/Lesiones, la lógica ya está arriba.
-  // Según REFERENCIAS.docx, "Enfrentamientos" es una CALIFICACIÓN LEGAL abordada
   else if (r.includes("enfrentamiento") || r.includes("tiroteo") || r.includes("bandas antagonicas")) {
-      clasificacion["CALIFICACIÓN"] = "ENFRENTAMIENTOS"; // Nueva calificación legal si no está ya
+      clasificacion["CALIFICACIÓN"] = "ENFRENTAMIENTOS";
       if (r.includes("ocasion de robo") || (r.includes("robo") && r.includes("enfrentamiento"))) {
         clasificacion["MODALIDAD"] = "EN OCASIÓN DE ROBO";
       } else if (r.includes("ajuste de cuentas")) {
         clasificacion["MODALIDAD"] = "AJUSTE DE CUENTAS";
-      } else if (r.includes("procedimiento policial") || r.includes("policia") && r.includes("delincuentes")) {
+      } else if (r.includes("procedimiento policial") || (r.includes("policia") && r.includes("delincuentes"))) {
         clasificacion["MODALIDAD"] = "PROCEDIMIENTO POLICIAL";
       } else if (r.includes("riña") || r.includes("gresca")) {
         clasificacion["MODALIDAD"] = "EN RIÑA";
@@ -196,10 +194,9 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
   }
 
   // --- LESIONADA --- (Si no fue clasificado como LESIONES arriba, se determina aquí)
-  // Si la calificación principal NO fue LESIONES pero el relato indica lesiones
   if (clasificacion["LESIONADA"] !== "SI" && (r.includes("lesionada") || r.includes("herida") || r.includes("golpeada") || r.includes("agredida") || r.includes("sufrio lesiones"))) {
       clasificacion["LESIONADA"] = "SI";
-  } else if (clasificacion["LESIONADA"] !== "SI") { // Si no se encontró indicio de lesión
+  } else if (clasificacion["LESIONADA"] !== "SI") {
       clasificacion["LESIONADA"] = "NO";
   }
 
@@ -209,7 +206,6 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
   const palabrasFemenino = ["femenina", "mujer", "señora", "fémina", "individua", "femeninas", "mujeres"];
   const palabrasPlural = ["varios", "varias", "ambos", "ambos sexos", "personas", "mas de uno", "dos"];
 
-  // Víctima/s
   let victimaSexo: string = "NO ESPECIFICADO";
   const relatoVictimaKeywords = ["victima", "victimas", "damnificado", "damnificada", "damnificados", "damnificadas"];
   const relatoTieneVictimaKeyword = relatoVictimaKeywords.some(kw => r.includes(kw));
@@ -223,13 +219,12 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
         victimaSexo = "AMBOS";
       } else if (tieneMasculino) {
         victimaSexo = "MASCULINO";
-      } else if (tieneFino) {
+      } else if (tieneFemenino) {
         victimaSexo = "FEMENINO";
       }
   }
   clasificacion["VICTIMA/S"] = victimaSexo;
 
-  // Imputado/s
   let imputadoSexo: string = "NO ESPECIFICADO";
   const relatoImputadoKeywords = ["imputado", "imputada", "imputados", "imputadas", "autor", "autora", "autores", "aprehendido", "aprehendida", "aprehendidos"];
   const relatoTieneImputadoKeyword = relatoImputadoKeywords.some(kw => r.includes(kw));
@@ -260,15 +255,12 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
   }
 
   // --- JURISDICCIÓN --- (Esta es la más difícil con reglas. Revisa las palabras clave con cuidado)
-  // Las jurisdicciones deben coincidir EXACTAMENTE con las de VALORES_VALIDOS.
-  // Es mejor tener un listado de todas las jurisdicciones y buscar con iteración.
   const jurisdicciones = VALORES_VALIDOS["JURISDICCION"];
   let jurisdiccionEncontrada = "NO ESPECIFICADO";
   for (const j of jurisdicciones) {
-    // Normalizar la jurisdicción para búsqueda (quitar tildes, mayúsculas)
     const normalizedJ = j.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     if (r.includes(normalizedJ) || r.includes(j.toLowerCase())) {
-      jurisdiccionEncontrada = j; // Asignar el nombre EXACTO de la lista
+      jurisdiccionEncontrada = j;
       break;
     }
   }
@@ -288,7 +280,7 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
   clasificacion["LUGAR"] = lugarEncontrado;
 
   // --- TENTATIVA ---
-  if (r.includes("intento de") || r.includes("tentativa de") || (r.includes("no logró") && (r.includes("robar") || r.includes("hurtar") || r.includes("concretar"))) || r.includes("fracaso el ilicito") || r.includes("no se consumó")) {
+  if (r.includes("intento de") || r.includes("tentativa de") || (r.includes("no logró") && (r.includes("robar") || r.includes("hurtar" || "concretar"))) || r.includes("fracaso el ilicito") || r.includes("no se consumó")) {
     clasificacion["TENTATIVA"] = "SI";
   } else {
     clasificacion["TENTATIVA"] = "NO";
@@ -300,7 +292,6 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
 
 
   // Validar y limpiar la clasificación final con VALORES_VALIDOS para el LOG y salida
-  // Esta validación asegura que solo se asignen valores de las listas desplegables.
   const validatedClasificacion: ClasificacionLegal = { ...CLASIFICACION_DEFAULT };
   for (const displayKey of IA_CLASSIFICATION_KEYS) {
     const value = clasificacion[displayKey];
@@ -310,7 +301,7 @@ function interpretarRelato(relato: string, logEntries: string[]): ClasificacionL
       validatedClasificacion[displayKey] = value;
     } else {
       validatedClasificacion[displayKey] = CLASIFICACION_DEFAULT[displayKey];
-      if (value !== CLASIFICACION_DEFAULT[displayKey]) { // Solo loguear si se asignó un valor no válido, no si ya era el default
+      if (value !== CLASIFICACION_DEFAULT[displayKey]) {
         logEntries.push(`    [!] ADVERTENCIA (Lógica Local): Campo "${displayKey}". Valor "${value}" NO VÁLIDO o no encontrado en lista. Usando '${CLASIFICACION_DEFAULT[displayKey]}'.`);
       }
     }
@@ -359,9 +350,9 @@ export async function procesarExcel(dataFile: File, templateFile: File | null): 
 
   json.forEach((row: FilaExcel, index: number) => {
     if (!row || Object.keys(row).length === 0 || Object.values(row).every(val => !val)) {
-      logEntries.push(`\n=== FILA ${index + 2} (ID: ${row?.id_hecho || 'N/A'}) - OMITIDA ===\n`);
+      logEntries.push(`\n### FILA ${index + 2} (ID: ${row?.id_hecho || 'N/A'}) - OMITIDA ###\n`);
       logEntries.push(`  MOTIVO: Fila vacía o no se pudo leer.\n`);
-      logEntries.push(`-----------------------------------------------------------------\n`);
+      logEntries.push(`-----------------------------------------------------------------\n\n`);
       return;
     }
 
@@ -387,7 +378,7 @@ export async function procesarExcel(dataFile: File, templateFile: File | null): 
     };
     
     logEntries.push(`\n--- PROCESANDO FILA ${index + 2} (ID Original: ${row.id_hecho || 'N/A'}) ---\n`);
-    logEntries.push(`  Relato Completo:\n  "${relato.substring(0, 150)}${relato.length > 150 ? '...' : ''}"\n`);
+    logEntries.push(`  Relato Original (Extracto): "${relato.substring(0, 150)}${relato.length > 150 ? '...' : ''}"\n`);
 
     if (!relato) {
       resultados.push({
@@ -395,7 +386,8 @@ export async function procesarExcel(dataFile: File, templateFile: File | null): 
         errorMessage: "Relato vacío, usando valores por defecto."
       });
       logEntries.push(`  >>> RESULTADO: RELATO VACÍO - Clasificación por defecto aplicada. <<<\n`);
-      logEntries.push(`  Clasificación Final Generada:\n${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
+      logEntries.push(`  Resumen Clasificación: ${baseProcessedRow.classification["CALIFICACIÓN"]} / ${baseProcessedRow.classification["MODALIDAD"]}\n`);
+      logEntries.push(`  Clasificación Completa:\n${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
       logEntries.push(`-----------------------------------------------------------------\n`);
       return;
     }
@@ -412,7 +404,8 @@ export async function procesarExcel(dataFile: File, templateFile: File | null): 
     });
     
     logEntries.push(`  >>> RESULTADO: Procesado con Lógica Local. <<<\n`);
-    logEntries.push(`  Clasificación Final:\n${JSON.stringify(resultados[resultados.length -1].classification, null, 2)}\n`);
+    logEntries.push(`  Resumen Clasificación: ${resultados[resultados.length -1].classification["CALIFICACIÓN"]} / ${resultados[resultados.length -1].classification["MODALIDAD"]}\n`);
+    logEntries.push(`  Clasificación Completa:\n${JSON.stringify(resultados[resultados.length -1].classification, null, 2)}\n`);
     if (baseProcessedRow.errorMessage) {
       logEntries.push(`    [!] ERROR: ${baseProcessedRow.errorMessage}\n`);
     }

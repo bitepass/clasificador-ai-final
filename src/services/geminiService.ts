@@ -1,24 +1,25 @@
+// src/services/geminiService.ts
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   ClasificacionLegal, FilaExcel, ProcessedRowData,
   CLASIFICACION_DEFAULT, VALORES_VALIDOS, EXCEL_OUTPUT_HEADERS,
-  IA_CLASSIFICATION_KEYS, DISPLAY_TO_INTERNAL_KEY_MAP
-} from '../types';
+  IA_CLASSIFICATION_KEYS, DISPLAY_TO_INTERNAL_KEY_MAP, CLASSIFICATION_LABELS
+} from '../types'; // Importar CLASSIFICATION_LABELS para logs
 import { GEMINI_MODEL_NAME, RELATO_COLUMN_KEYWORDS } from '../constants';
 
-// Funciones auxiliares para Excel
+// Funciones auxiliares para Excel (readExcelFile, readBinaryExcelTemplate) - Sin cambios aquí
 export async function readExcelFile(file: File): Promise<FilaExcel[]> {
   const data = await file.arrayBuffer();
   const workbook = XLSX.read(data);
-  const sheetName = workbook.SheetNames[0]; // Lee la primera hoja por defecto
+  const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
 
   const rawJson: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: null });
 
   if (rawJson.length === 0) {
-      return []; // Archivo vacío
+      return [];
   }
 
   const actualHeaders: string[] = rawJson[0].map(h => String(h || '').trim());
@@ -108,8 +109,8 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
 
   if (templateFile) {
     try {
-      templateWorkbook = await readBinaryExcelTemplate(templateFile);
-      sheetName = templateWorkbook.SheetNames[0];
+      workbook = await readBinaryExcelTemplate(templateFile);
+      sheetName = workbook.SheetNames[0];
     } catch (e: any) {
       console.error("Error al leer la plantilla Excel:", e);
     }
@@ -133,9 +134,9 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row || Object.keys(row).length === 0 || Object.values(row).every(val => !val)) {
-      logEntries.push(`\n=== FILA ${i + 2} (ID: ${row?.id_hecho || 'N/A'}) - OMITIDA ===\n`); // Sección más clara
+      logEntries.push(`\n### FILA ${i + 2} (ID: ${row?.id_hecho || 'N/A'}) - OMITIDA ###\n`); // Sección más clara
       logEntries.push(`  MOTIVO: Fila vacía o no se pudo leer.\n`);
-      logEntries.push(`-----------------------------------------------------------------\n`);
+      logEntries.push(`-----------------------------------------------------------------\n\n`);
       continue;
     }
 
@@ -161,8 +162,8 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
       errorMessage: undefined
     };
 
-    logEntries.push(`\n=== PROCESANDO FILA ${i + 2} (ID Original: ${row.id_hecho || 'N/A'}) ===\n`);
-    logEntries.push(`  Relato Completo:\n  "${relato}"\n`); // Muestra el relato completo
+    logEntries.push(`\n--- PROCESANDO FILA ${i + 2} (ID Original: ${row.id_hecho || 'N/A'}) ---\n`);
+    logEntries.push(`  Relato Original (Extracto): "${relato.substring(0, 150)}${relato.length > 150 ? '...' : ''}"\n`);
 
     if (!relato) {
       classifiedData.push({
@@ -170,7 +171,8 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
         errorMessage: "Relato vacío, usando valores por defecto."
       });
       logEntries.push(`  >>> RESULTADO: RELATO VACÍO - Clasificación por defecto aplicada. <<<\n`);
-      logEntries.push(`  Clasificación Final Generada:\n${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
+      logEntries.push(`  Resumen Clasificación: ${baseProcessedRow.classification["CALIFICACIÓN"]} / ${baseProcessedRow.classification["MODALIDAD"]}\n`);
+      logEntries.push(`  Clasificación Completa:\n${JSON.stringify(baseProcessedRow.classification, null, 2)}\n`);
       logEntries.push(`-----------------------------------------------------------------\n`);
       continue;
     }
@@ -208,13 +210,11 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
       "FRECUENCIA": [${VALORES_VALIDOS["FRECUENCIA"].map(v => `"${v}"`).join(', ')}]
       `;
 
-      // logEntries.push(`  Prompt enviado a IA:\n${prompt}\n`); // Para depuración, puedes descomentar esto.
-
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
 
-      logEntries.push(`  Respuesta Cruda de IA recibida:\n  "${text.replace(/\n/g, '\\n')}"\n`);
+      logEntries.push(`  Respuesta Cruda de IA (para depuración):\n  "${text.replace(/\n/g, '\\n')}"\n`); // Mantenerlo para debug
 
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       let classifiedByIA: any = {};
@@ -244,14 +244,23 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
         errorMessage: errorParsing ? baseProcessedRow.errorMessage : undefined
       });
 
-      logEntries.push(`  >>> RESULTADO: Procesado con IA. <<<\n`);
-      logEntries.push(`  Clasificación Final Validada:\n${JSON.stringify(classifiedData[classifiedData.length -1].classification, null, 2)}\n`);
+      // --- RESUMEN DE CLASIFICACIÓN para el usuario ---
+      const iaSummary = `${baseProcessedRow.classification["CALIFICACIÓN"] || 'N/A'} | ${baseProcessedRow.classification["MODALIDAD"] || 'N/A'} | ${baseProcessedRow.classification["ARMAS"] || 'N/A'}`;
+      logEntries.push(`  >>> RESULTADO: ${iaSummary} <<<\n`);
+      logEntries.push(`  (Para detalles completos, revisar Clasificación Final Validada a continuación o el Excel generado.)\n`);
+      logEntries.push(`  Clasificación Final Validada (JSON completo):\n${JSON.stringify(classifiedData[classifiedData.length -1].classification, null, 2)}\n`);
       if (classifiedData[classifiedData.length -1].errorMessage) {
         logEntries.push(`    [!!!] ERROR EN FILA: ${classifiedData[classifiedData.length -1].errorMessage}\n`);
       }
       logEntries.push(`-----------------------------------------------------------------\n`);
 
     } catch (error: any) {
+      // Manejo de errores de CUOTA (429) de forma más amigable en el log
+      let userFriendlyErrorMessage = `Error de IA al procesar: ${error.message || error}`;
+      if (error.message && error.message.includes("429 You exceeded your current quota")) {
+          userFriendlyErrorMessage = `Error de Cuota de la API de Gemini: Límite de uso excedido para esta clave. (Código 429). Por favor, espere 24 horas o contacte al administrador para más cuota.`;
+      }
+
       console.error(`Error general al procesar fila ${i + 2} con IA:`, error);
       classifiedData.push({
         ...baseProcessedRow,
@@ -259,9 +268,9 @@ export async function classifyRelatoBatch(genAI: GoogleGenerativeAI, rows: FilaE
             ...baseProcessedRow.classification,
             ...CLASIFICACION_DEFAULT
         },
-        errorMessage: `Error de IA: ${error.message || error}`
+        errorMessage: userFriendlyErrorMessage // Usar el mensaje amigable
       });
-      logEntries.push(`  >>> RESULTADO: ERROR GENERAL DE IA - ${error.message || error} <<<\n`);
+      logEntries.push(`  >>> RESULTADO: ERROR DE IA. ${userFriendlyErrorMessage} <<<\n`);
       logEntries.push(`  Clasificación Final (Usando solo Originales y Defaults):\n${JSON.stringify(classifiedData[classifiedData.length -1].classification, null, 2)}\n`);
       logEntries.push(`-----------------------------------------------------------------\n`);
     }

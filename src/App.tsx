@@ -1,17 +1,12 @@
 import React, { useState } from "react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { saveAs } from "file-saver";
-import { classifyRelatoBatch, downloadExcel, downloadLog, readExcelFile } from "./services/geminiService";
-import { procesarExcel as procesarExcelLocal } from "./services/excelService";
 import FileUpload from "./components/FileUpload";
 import StepIndicator from "./components/StepIndicator";
 import ResultsDisplay from "./components/ResultsDisplay";
 import { AppStep, ProcessedRowData } from "./types";
 import { Header } from "./components/Header";
 import { Footer } from "./components/Footer";
-import { GEMINI_MODEL_NAME } from "./constants";
 import { ErrorModal } from "./components/ErrorModal";
-import { ProcessingView } from "./components/ProcessingView";
 
 import "./index.css";
 
@@ -19,13 +14,13 @@ const App = () => {
   const [dataExcelFile, setDataExcelFile] = useState<File | null>(null);
   const [templateExcelFile, setTemplateExcelFile] = useState<File | null>(null);
   const [step, setStep] = useState<AppStep>(AppStep.UPLOAD);
-  const [results, setResults] = useState<ProcessedRowData[]>([]);
-  const [logText, setLogText] = useState<string>("");
+  const [results, setResults] = useState<ProcessedRowData[]>([]); // Los resultados para la tabla de UI (ahora menos crítica, más para mostrar proceso)
+  const [logText, setLogText] = useState<string>(""); // Log completo del backend
   const [error, setError] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [estimatedProcessingTime, setEstimatedProcessingTime] = useState<string>("");
 
-  // Variable global para guardar el último archivo de datos subido (para la lógica legal local)
+  // Variable global para guardar el último archivo de datos subido
   declare global {
     interface Window {
       __lastUploadedFile__: File | null;
@@ -33,12 +28,13 @@ const App = () => {
   }
   window.__lastUploadedFile__ = dataExcelFile;
 
+  // URL de tu backend Flask. ¡Asegúrate de que el puerto coincida con el de app.py!
+  const BACKEND_URL = "http://localhost:5000";
+
   const calculateEstimatedTime = (numberOfRows: number) => {
-    // Esta es una aproximación. El tiempo real depende de la complejidad del relato
-    // y la carga del servidor de la IA. Ajusta este valor después de pruebas reales.
-    const averageTimePerRelatoMs = 3500; // Por ejemplo, 3.5 segundos por relato de IA
+    const averageTimePerRelatoMs = 3500; // Estimación del tiempo que tarda el backend
     const totalEstimatedTimeMs = numberOfRows * averageTimePerRelatoMs;
-    
+
     let timeMessage = "";
     const hours = Math.floor(totalEstimatedTimeMs / 3600000);
     const remainingMinutes = Math.floor((totalEstimatedTimeMs % 3600000) / 60000);
@@ -54,106 +50,103 @@ const App = () => {
       timeMessage += `${remainingSeconds} segundo(s)`;
     }
     if (timeMessage.trim() === "") {
-      timeMessage = "unos segundos"; // Para casos de muy pocas filas o 0 filas
+      timeMessage = "unos segundos";
     }
 
     return `Esto puede tomar aproximadamente ${timeMessage}, dependiendo de la cantidad de filas.`;
   };
 
-  const handleFileUpload = (dataFile: File, templateFile: File | null) => {
+  // Esta función ahora envía los archivos al backend
+  const handleFileUpload = async (dataFile: File, templateFile: File | null) => {
     setDataExcelFile(dataFile);
-    setTemplateExcelFile(templateFile); // Guardar el archivo de plantilla
-    window.__lastUploadedFile__ = dataFile; // Actualizar la variable global
+    setTemplateExcelFile(templateFile);
+    window.__lastUploadedFile__ = dataFile; // Actualizar global
 
     setStep(AppStep.PROCESSING);
     setError("");
-    setResults([]); // Limpiar resultados anteriores
-    setLogText(""); // Limpiar log anterior
+    setResults([]);
+    setLogText("");
     setIsProcessing(true);
-    setEstimatedProcessingTime("Calculando tiempo estimado..."); // Mensaje inicial
+    setEstimatedProcessingTime("Enviando archivos al servidor...");
 
-    const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!API_KEY) {
-      const errMsg = "Error: La clave de API de Gemini (VITE_GEMINI_API_KEY) no está configurada. Asegúrate de tener un archivo .env.local con la clave.";
-      console.error(errMsg);
-      setError(errMsg);
-      setStep(AppStep.UPLOAD);
-      setIsProcessing(false);
-      setEstimatedProcessingTime("");
-      return;
+    // Crear FormData para enviar los archivos al backend
+    const formData = new FormData();
+    formData.append("dataFile", dataFile);
+    if (templateFile) {
+      formData.append("templateFile", templateFile);
     }
 
-    const genAI = new GoogleGenerativeAI(API_KEY);
-
-    readExcelFile(dataFile) // Leer solo el archivo de datos
-      .then(async (rows) => {
-        if (rows.length === 0) {
-          setError("El archivo Excel de datos está vacío o no se pudieron leer las filas.");
-          setStep(AppStep.UPLOAD);
-          setIsProcessing(false);
-          setEstimatedProcessingTime("");
-          return;
-        }
-        setEstimatedProcessingTime(calculateEstimatedTime(rows.length)); // Calcular y mostrar tiempo real
-
-        const { classifiedData, log } = await classifyRelatoBatch(genAI, rows, templateFile);
-        setResults(classifiedData);
-        setLogText(log);
-        setStep(AppStep.RESULTS);
-      })
-      .catch((err) => {
-        console.error("Error processing file with AI:", err);
-        setError(`Hubo un error al procesar el archivo con IA: ${err.message || err}. Por favor, verifica tu clave de API, el nombre del modelo o el formato de los archivos.`);
-        setStep(AppStep.UPLOAD);
-      })
-      .finally(() => {
-        setIsProcessing(false);
-      });
-  };
-
-  // Clasificación legal local (sin IA) - Función para el botón de "Generar Excel Legal + LOG (sin IA)"
-  // Este botón ahora también descargará el Excel con el formato de la plantilla.
-  const handleProcessLegalLocal = async () => {
-    // Ahora esta función también necesita la plantilla si queremos que genere un Excel con formato
-    if (!dataExcelFile) { // También verifica si templateExcelFile es null si la lógica lo requiere
-      setError("Por favor carga la base de datos Excel primero para usar la lógica legal local.");
-      return;
-    }
-
-    setIsProcessing(true);
-    setError("");
-    setEstimatedProcessingTime("Procesando con lógica legal local...");
-    
     try {
-      await procesarExcelLocal(dataExcelFile, templateExcelFile); // Esta función ya maneja la descarga de Excel y LOG
-      resetApp(); // Resetear la app después de la descarga
-      alert("Archivos descargados exitosamente (Excel Clasificado con Lógica Legal + LOG Local).");
-    } catch (err) {
-      console.error("Error en clasificación legal local:", err);
-      setError(`Error al procesar con lógica legal local: ${err.message || err}`);
+      // No leer el Excel aquí, solo obtener el número de filas para la estimación
+      // Podrías hacer una pequeña función auxiliar si necesitas las filas antes de enviar al backend
+      // Por ahora, asumimos que el número de filas se puede estimar o el backend lo maneja.
+      // Para esta demostración, no podemos estimar filas sin leer el Excel aquí.
+      // Mantendremos una estimación simple o la quitamos si no hay acceso a las filas.
+      // Si quieres la estimación precisa, tendríamos que leer el dataFile aquí para contar las filas.
+      setEstimatedProcessingTime(calculateEstimatedTime(100)); // Poniendo un número fijo para la demo (ej: 100 filas)
+
+      const response = await fetch(`${BACKEND_URL}/process-excel`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Error del servidor: ${response.status} ${response.statusText}`);
+      }
+
+      // Si el backend devuelve el archivo Excel
+      const blob = await response.blob();
+      saveAs(blob, `Clasificado_Final_${new Date().getTime()}.xlsx`); // Guardar el Excel final del backend
+
+      setLogText("Procesamiento completado por el servidor. Archivo Excel final descargado.");
+      setStep(AppStep.RESULTS);
+
+    } catch (err: any) {
+      console.error("Error al comunicarse con el backend:", err);
+      setError(`Error al procesar: ${err.message || err}. Asegúrate que el servidor de backend esté corriendo.`);
+      setStep(AppStep.UPLOAD);
     } finally {
       setIsProcessing(false);
       setEstimatedProcessingTime("");
     }
   };
 
-  // Funciones de descarga para el botón "Descargar Excel Clasificado (IA)"
-  const handleDownloadExcelIA = () => {
-    if (results.length > 0) {
-      downloadExcel(results, `San Martín 2025 - Clasificado IA ${new Date().getTime()}.xlsx`, templateExcelFile); // Pasa templateFile
-    }
+  // La lógica de procesarExcelLocal (sin IA) ahora también debe llamar al backend,
+  // o se mantiene como una opción muy básica que no usa la plantilla.
+  // Por simplicidad, por ahora este botón ya no llamará a una función local de ExcelService
+  // sino que si la queremos con formato de plantilla, iría por backend.
+  // Si el backend es para *ambas* IA y Legal Local, el endpoint debería manejarlo.
+  // O podemos eliminar este botón si el backend se encarga de todo.
+  const handleProcessLegalLocal = async () => {
+    setError("Esta opción requiere el backend para generar el Excel con formato completo. Por favor, procese el archivo principal.");
+    // O si quieres que aún genere un Excel básico sin formato desde el frontend:
+    // if (!dataExcelFile) { setError("Por favor carga la base de datos Excel."); return; }
+    // try {
+    //   setIsProcessing(true);
+    //   await procesarExcelLocal(dataExcelFile, null); // Forzar sin plantilla si no hay backend para eso
+    //   alert("Archivos descargados exitosamente (Excel Clasificado con Lógica Legal + LOG Local).");
+    // } catch (err:any) { console.error("Error:", err); setError(`Error local: ${err.message}`); }
+    // finally { setIsProcessing(false); }
   };
 
-  // Función de descarga para el botón "Descargar LOG IA"
-  const handleDownloadLogIA = () => {
-    if (logText) {
-      downloadLog(logText, `San Martín 2025 - Clasificador LOG IA ${new Date().getTime()}.txt`);
-    }
+
+  // Funciones de descarga de logs y excel: AHORA LAS GESTIONA EL BACKEND
+  const handleDownloadExcelIA = () => {
+    alert("El archivo Excel clasificado ya se descargó automáticamente al finalizar el procesamiento.");
   };
+
+  const handleDownloadLogIA = () => {
+    // El LOG completo debería venir del backend junto con el Excel, o se puede pedir en otro endpoint
+    alert("El LOG detallado viene con la respuesta del servidor. Por ahora, solo se muestra en consola o necesitará un endpoint de descarga del backend.");
+    console.log("LOG completo del servidor:", logText); // Mostrar en consola por ahora
+    // Si el backend devuelve el log como parte del JSON de error, o si lo guarda y hay un endpoint para pedirlo.
+  };
+
 
   const resetApp = () => {
     setDataExcelFile(null);
-    setTemplateExcelFile(null); // Limpiar también el archivo de plantilla
+    setTemplateExcelFile(null);
     window.__lastUploadedFile__ = null;
     setStep(AppStep.UPLOAD);
     setResults([]);
@@ -169,25 +162,25 @@ const App = () => {
       <main className="flex-grow max-w-4xl mx-auto p-4 flex flex-col items-center justify-center w-full">
         <h1 className="text-2xl font-bold mb-4 text-center">Clasificador de Delitos</h1>
         <StepIndicator currentStep={step} />
-        
+
         {error && <ErrorModal message={error} onClose={() => setError("")} />}
-        
+
         {step === AppStep.UPLOAD && (
           <FileUpload onFileUpload={handleFileUpload} disabled={isProcessing}/>
         )}
-        
+
         {step === AppStep.PROCESSING && (
-          <ProcessingView 
-            progress={50}
-            message="Analizando relatos con Inteligencia Artificial..."
+          <ProcessingView
+            progress={50} // Puedes hacer que el backend envíe progreso
+            message="Enviando archivos y esperando clasificación del servidor..."
             estimatedTime={estimatedProcessingTime}
             onCancel={resetApp}
           />
         )}
-        
+
         {step === AppStep.RESULTS && (
           <ResultsDisplay
-            results={results}
+            results={results} // Estos resultados son solo para la vista previa en UI, no el archivo final
             onDownloadExcel={handleDownloadExcelIA}
             onDownloadLog={handleDownloadLogIA}
             onReset={resetApp}
