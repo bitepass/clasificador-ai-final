@@ -1,110 +1,74 @@
-from flask import Flask, request, send_file, jsonify
-from flask_cors import CORS
-import pandas as pd
-import os
-import tempfile
-from openpyxl import load_workbook
+import { useState } from 'react';
+import { Header } from './components/Header';
+import { Footer } from './components/Footer';
+import { FileUpload } from './components/FileUpload';
+import { ResultsDisplay } from './components/ResultsDisplay';
+import { ProcessedData } from './types';
+import { processFile } from './services/geminiService';
 
-app = Flask(__name__)
-CORS(app)
+function App() {
+  const [results, setResults] = useState<ProcessedData[] | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string>('');
 
-def clasificar_relato(relato: str) -> dict:
-    """Lógica simulada para clasificar un relato según palabras clave."""
-    if not isinstance(relato, str) or relato.strip() == "":
-        return {
-            "CLASIFICACION": "RELATO VACÍO",
-            "ARTICULO": "",
-            "DELITO": "",
-            "AGRAVANTE": "",
-            "errorMessage": "Relato vacío, usando valores por defecto."
-        }
+  const handleFileProcess = async (file: File) => {
+    setIsLoading(true);
+    setError(null);
+    setResults(null);
+    setFileName(file.name);
 
-    relato_lower = relato.lower()
+    try {
+      const processedResults = await processFile(file);
+      setResults(processedResults);
+    } catch (err: any) {
+      setError(err.message || 'Ocurrió un error desconocido.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    if "arma" in relato_lower and "robo" in relato_lower:
-        return {
-            "CLASIFICACION": "ROBO AGRAVADO",
-            "ARTICULO": "166",
-            "DELITO": "ROBO",
-            "AGRAVANTE": "USO DE ARMA",
-            "errorMessage": ""
-        }
-    elif "homicidio" in relato_lower:
-        return {
-            "CLASIFICACION": "HOMICIDIO",
-            "ARTICULO": "79",
-            "DELITO": "HOMICIDIO",
-            "AGRAVANTE": "",
-            "errorMessage": ""
-        }
-    else:
-        return {
-            "CLASIFICACION": "SIN CLASIFICAR",
-            "ARTICULO": "",
-            "DELITO": "",
-            "AGRAVANTE": "",
-            "errorMessage": "No se pudo clasificar automáticamente."
-        }
+  const handleReset = () => {
+    setResults(null);
+    setError(null);
+    setIsLoading(false);
+    setFileName('');
+  };
 
-@app.route('/process-excel', methods=['POST'])
-def process_excel():
-    try:
-        data_file = request.files.get("dataFile")
-        template_file = request.files.get("templateFile")
+  return (
+    <div className="flex flex-col min-h-screen bg-gray-50">
+      <Header />
+      <main className="flex-grow container mx-auto p-4 md:p-8">
+        <div className="max-w-4xl mx-auto">
+          {!results && !isLoading && !error && (
+            <FileUpload onFileProcess={handleFileProcess} />
+          )}
+          {isLoading && (
+            <div className="text-center p-8 bg-white rounded-lg shadow-md">
+              <p className="text-lg text-gray-700">Procesando archivo, por favor espera...</p>
+              <div className="mt-4 animate-spin h-8 w-8 text-blue-600 mx-auto" />
+            </div>
+          )}
+          {error && (
+            <div className="text-center p-8 bg-red-100 border border-red-400 text-red-700 rounded-lg shadow-md">
+              <h2 className="text-xl font-bold mb-2">Error</h2>
+              <p>{error}</p>
+              <button
+                onClick={handleReset}
+                className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              >
+                Intentar de Nuevo
+              </button>
+            </div>
+          )}
+          {results && (
+            <ResultsDisplay results={results} onReset={handleReset} fileName={fileName} />
+          )}
+        </div>
+      </main>
+      <Footer />
+    </div>
+  );
+}
 
-        if not data_file:
-            return jsonify({"error": "Falta el archivo base de datos Excel"}), 400
-
-        df = pd.read_excel(data_file)
-        log_lines = []
-
-        # Clasificar cada fila
-        clasificaciones = []
-        for i, row in df.iterrows():
-            relato = str(row.get("RELATO", "")).strip()
-            resultado = clasificar_relato(relato)
-            clasificaciones.append(resultado)
-
-            log_line = f"Fila {i + 1}: {resultado['CLASIFICACION']} | Art: {resultado['ARTICULO']} | {resultado['errorMessage']}"
-            log_lines.append(log_line)
-
-        # Convertir lista de dicts en DataFrame de clasificación
-        clasif_df = pd.DataFrame(clasificaciones)
-
-        # Combinar con df original
-        final_df = pd.concat([df.reset_index(drop=True), clasif_df], axis=1)
-
-        # Crear archivos temporales
-        temp_excel = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-        temp_log = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
-
-        # Si hay plantilla, copiar sobre ella
-        if template_file:
-            wb = load_workbook(template_file)
-            ws = wb.active
-
-            # Insertar resultados a partir de fila 2, columna 1
-            for i, row in final_df.iterrows():
-                ws.cell(row=i + 2, column=1, value=row.get("RELATO", ""))
-                ws.cell(row=i + 2, column=2, value=row.get("CLASIFICACION", ""))
-                ws.cell(row=i + 2, column=3, value=row.get("ARTICULO", ""))
-                ws.cell(row=i + 2, column=4, value=row.get("DELITO", ""))
-                ws.cell(row=i + 2, column=5, value=row.get("AGRAVANTE", ""))
-
-            wb.save(temp_excel.name)
-        else:
-            final_df.to_excel(temp_excel.name, index=False)
-
-        # Guardar LOG
-        with open(temp_log.name, "w", encoding="utf-8") as log_file:
-            log_file.write("\n".join(log_lines))
-
-        print(f"[✔] Procesamiento exitoso. Archivo: {temp_excel.name}")
-        return send_file(temp_excel.name, as_attachment=True, download_name="Clasificado_Final.xlsx")
-
-    except Exception as e:
-        return jsonify({"error": f"Error interno del servidor: {str(e)}"}), 500
-
-
-if __name__ == '__main__':
-    app.run(host="localhost", port=5000, debug=True)
+export default App;
