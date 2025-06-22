@@ -1,197 +1,110 @@
-import React, { useState } from "react";
-import { saveAs } from "file-saver";
-import FileUpload from "./components/FileUpload";
-import StepIndicator from "./components/StepIndicator";
-import ResultsDisplay from "./components/ResultsDisplay";
-import { AppStep, ProcessedRowData } from "./types";
-import { Header } from "./components/Header";
-import { Footer } from "./components/Footer";
-import { ErrorModal } from "./components/ErrorModal";
+from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
+import pandas as pd
+import os
+import tempfile
+from openpyxl import load_workbook
 
-import "./index.css";
+app = Flask(__name__)
+CORS(app)
 
-const App = () => {
-  const [dataExcelFile, setDataExcelFile] = useState<File | null>(null);
-  const [templateExcelFile, setTemplateExcelFile] = useState<File | null>(null);
-  const [step, setStep] = useState<AppStep>(AppStep.UPLOAD);
-  const [results, setResults] = useState<ProcessedRowData[]>([]); // Los resultados para la tabla de UI (ahora menos crítica, más para mostrar proceso)
-  const [logText, setLogText] = useState<string>(""); // Log completo del backend
-  const [error, setError] = useState<string>("");
-  const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [estimatedProcessingTime, setEstimatedProcessingTime] = useState<string>("");
+def clasificar_relato(relato: str) -> dict:
+    """Lógica simulada para clasificar un relato según palabras clave."""
+    if not isinstance(relato, str) or relato.strip() == "":
+        return {
+            "CLASIFICACION": "RELATO VACÍO",
+            "ARTICULO": "",
+            "DELITO": "",
+            "AGRAVANTE": "",
+            "errorMessage": "Relato vacío, usando valores por defecto."
+        }
 
-  // Variable global para guardar el último archivo de datos subido
-  declare global {
-    interface Window {
-      __lastUploadedFile__: File | null;
-    }
-  }
-  window.__lastUploadedFile__ = dataExcelFile;
+    relato_lower = relato.lower()
 
-  // URL de tu backend Flask. ¡Asegúrate de que el puerto coincida con el de app.py!
-  const BACKEND_URL = "http://localhost:5000";
+    if "arma" in relato_lower and "robo" in relato_lower:
+        return {
+            "CLASIFICACION": "ROBO AGRAVADO",
+            "ARTICULO": "166",
+            "DELITO": "ROBO",
+            "AGRAVANTE": "USO DE ARMA",
+            "errorMessage": ""
+        }
+    elif "homicidio" in relato_lower:
+        return {
+            "CLASIFICACION": "HOMICIDIO",
+            "ARTICULO": "79",
+            "DELITO": "HOMICIDIO",
+            "AGRAVANTE": "",
+            "errorMessage": ""
+        }
+    else:
+        return {
+            "CLASIFICACION": "SIN CLASIFICAR",
+            "ARTICULO": "",
+            "DELITO": "",
+            "AGRAVANTE": "",
+            "errorMessage": "No se pudo clasificar automáticamente."
+        }
 
-  const calculateEstimatedTime = (numberOfRows: number) => {
-    const averageTimePerRelatoMs = 3500; // Estimación del tiempo que tarda el backend
-    const totalEstimatedTimeMs = numberOfRows * averageTimePerRelatoMs;
+@app.route('/process-excel', methods=['POST'])
+def process_excel():
+    try:
+        data_file = request.files.get("dataFile")
+        template_file = request.files.get("templateFile")
 
-    let timeMessage = "";
-    const hours = Math.floor(totalEstimatedTimeMs / 3600000);
-    const remainingMinutes = Math.floor((totalEstimatedTimeMs % 3600000) / 60000);
-    const remainingSeconds = Math.round((totalEstimatedTimeMs % 60000) / 1000);
+        if not data_file:
+            return jsonify({"error": "Falta el archivo base de datos Excel"}), 400
 
-    if (hours > 0) {
-      timeMessage += `${hours} hora(s) `;
-    }
-    if (remainingMinutes > 0) {
-      timeMessage += `${remainingMinutes} minuto(s) `;
-    }
-    if (remainingSeconds > 0 || (hours === 0 && remainingMinutes === 0 && numberOfRows > 0)) {
-      timeMessage += `${remainingSeconds} segundo(s)`;
-    }
-    if (timeMessage.trim() === "") {
-      timeMessage = "unos segundos";
-    }
+        df = pd.read_excel(data_file)
+        log_lines = []
 
-    return `Esto puede tomar aproximadamente ${timeMessage}, dependiendo de la cantidad de filas.`;
-  };
+        # Clasificar cada fila
+        clasificaciones = []
+        for i, row in df.iterrows():
+            relato = str(row.get("RELATO", "")).strip()
+            resultado = clasificar_relato(relato)
+            clasificaciones.append(resultado)
 
-  // Esta función ahora envía los archivos al backend
-  const handleFileUpload = async (dataFile: File, templateFile: File | null) => {
-    setDataExcelFile(dataFile);
-    setTemplateExcelFile(templateFile);
-    window.__lastUploadedFile__ = dataFile; // Actualizar global
+            log_line = f"Fila {i + 1}: {resultado['CLASIFICACION']} | Art: {resultado['ARTICULO']} | {resultado['errorMessage']}"
+            log_lines.append(log_line)
 
-    setStep(AppStep.PROCESSING);
-    setError("");
-    setResults([]);
-    setLogText("");
-    setIsProcessing(true);
-    setEstimatedProcessingTime("Enviando archivos al servidor...");
+        # Convertir lista de dicts en DataFrame de clasificación
+        clasif_df = pd.DataFrame(clasificaciones)
 
-    // Crear FormData para enviar los archivos al backend
-    const formData = new FormData();
-    formData.append("dataFile", dataFile);
-    if (templateFile) {
-      formData.append("templateFile", templateFile);
-    }
+        # Combinar con df original
+        final_df = pd.concat([df.reset_index(drop=True), clasif_df], axis=1)
 
-    try {
-      // No leer el Excel aquí, solo obtener el número de filas para la estimación
-      // Podrías hacer una pequeña función auxiliar si necesitas las filas antes de enviar al backend
-      // Por ahora, asumimos que el número de filas se puede estimar o el backend lo maneja.
-      // Para esta demostración, no podemos estimar filas sin leer el Excel aquí.
-      // Mantendremos una estimación simple o la quitamos si no hay acceso a las filas.
-      // Si quieres la estimación precisa, tendríamos que leer el dataFile aquí para contar las filas.
-      setEstimatedProcessingTime(calculateEstimatedTime(100)); // Poniendo un número fijo para la demo (ej: 100 filas)
+        # Crear archivos temporales
+        temp_excel = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
+        temp_log = tempfile.NamedTemporaryFile(delete=False, suffix=".txt")
 
-      const response = await fetch(`${BACKEND_URL}/process-excel`, {
-        method: "POST",
-        body: formData,
-      });
+        # Si hay plantilla, copiar sobre ella
+        if template_file:
+            wb = load_workbook(template_file)
+            ws = wb.active
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Error del servidor: ${response.status} ${response.statusText}`);
-      }
+            # Insertar resultados a partir de fila 2, columna 1
+            for i, row in final_df.iterrows():
+                ws.cell(row=i + 2, column=1, value=row.get("RELATO", ""))
+                ws.cell(row=i + 2, column=2, value=row.get("CLASIFICACION", ""))
+                ws.cell(row=i + 2, column=3, value=row.get("ARTICULO", ""))
+                ws.cell(row=i + 2, column=4, value=row.get("DELITO", ""))
+                ws.cell(row=i + 2, column=5, value=row.get("AGRAVANTE", ""))
 
-      // Si el backend devuelve el archivo Excel
-      const blob = await response.blob();
-      saveAs(blob, `Clasificado_Final_${new Date().getTime()}.xlsx`); // Guardar el Excel final del backend
+            wb.save(temp_excel.name)
+        else:
+            final_df.to_excel(temp_excel.name, index=False)
 
-      setLogText("Procesamiento completado por el servidor. Archivo Excel final descargado.");
-      setStep(AppStep.RESULTS);
+        # Guardar LOG
+        with open(temp_log.name, "w", encoding="utf-8") as log_file:
+            log_file.write("\n".join(log_lines))
 
-    } catch (err: any) {
-      console.error("Error al comunicarse con el backend:", err);
-      setError(`Error al procesar: ${err.message || err}. Asegúrate que el servidor de backend esté corriendo.`);
-      setStep(AppStep.UPLOAD);
-    } finally {
-      setIsProcessing(false);
-      setEstimatedProcessingTime("");
-    }
-  };
+        print(f"[✔] Procesamiento exitoso. Archivo: {temp_excel.name}")
+        return send_file(temp_excel.name, as_attachment=True, download_name="Clasificado_Final.xlsx")
 
-  // La lógica de procesarExcelLocal (sin IA) ahora también debe llamar al backend,
-  // o se mantiene como una opción muy básica que no usa la plantilla.
-  // Por simplicidad, por ahora este botón ya no llamará a una función local de ExcelService
-  // sino que si la queremos con formato de plantilla, iría por backend.
-  // Si el backend es para *ambas* IA y Legal Local, el endpoint debería manejarlo.
-  // O podemos eliminar este botón si el backend se encarga de todo.
-  const handleProcessLegalLocal = async () => {
-    setError("Esta opción requiere el backend para generar el Excel con formato completo. Por favor, procese el archivo principal.");
-    // O si quieres que aún genere un Excel básico sin formato desde el frontend:
-    // if (!dataExcelFile) { setError("Por favor carga la base de datos Excel."); return; }
-    // try {
-    //   setIsProcessing(true);
-    //   await procesarExcelLocal(dataExcelFile, null); // Forzar sin plantilla si no hay backend para eso
-    //   alert("Archivos descargados exitosamente (Excel Clasificado con Lógica Legal + LOG Local).");
-    // } catch (err:any) { console.error("Error:", err); setError(`Error local: ${err.message}`); }
-    // finally { setIsProcessing(false); }
-  };
+    except Exception as e:
+        return jsonify({"error": f"Error interno del servidor: {str(e)}"}), 500
 
 
-  // Funciones de descarga de logs y excel: AHORA LAS GESTIONA EL BACKEND
-  const handleDownloadExcelIA = () => {
-    alert("El archivo Excel clasificado ya se descargó automáticamente al finalizar el procesamiento.");
-  };
-
-  const handleDownloadLogIA = () => {
-    // El LOG completo debería venir del backend junto con el Excel, o se puede pedir en otro endpoint
-    alert("El LOG detallado viene con la respuesta del servidor. Por ahora, solo se muestra en consola o necesitará un endpoint de descarga del backend.");
-    console.log("LOG completo del servidor:", logText); // Mostrar en consola por ahora
-    // Si el backend devuelve el log como parte del JSON de error, o si lo guarda y hay un endpoint para pedirlo.
-  };
-
-
-  const resetApp = () => {
-    setDataExcelFile(null);
-    setTemplateExcelFile(null);
-    window.__lastUploadedFile__ = null;
-    setStep(AppStep.UPLOAD);
-    setResults([]);
-    setLogText("");
-    setError("");
-    setIsProcessing(false);
-    setEstimatedProcessingTime("");
-  };
-
-  return (
-    <div className="min-h-screen flex flex-col bg-slate-900 text-white">
-      <Header />
-      <main className="flex-grow max-w-4xl mx-auto p-4 flex flex-col items-center justify-center w-full">
-        <h1 className="text-2xl font-bold mb-4 text-center">Clasificador de Delitos</h1>
-        <StepIndicator currentStep={step} />
-
-        {error && <ErrorModal message={error} onClose={() => setError("")} />}
-
-        {step === AppStep.UPLOAD && (
-          <FileUpload onFileUpload={handleFileUpload} disabled={isProcessing}/>
-        )}
-
-        {step === AppStep.PROCESSING && (
-          <ProcessingView
-            progress={50} // Puedes hacer que el backend envíe progreso
-            message="Enviando archivos y esperando clasificación del servidor..."
-            estimatedTime={estimatedProcessingTime}
-            onCancel={resetApp}
-          />
-        )}
-
-        {step === AppStep.RESULTS && (
-          <ResultsDisplay
-            results={results} // Estos resultados son solo para la vista previa en UI, no el archivo final
-            onDownloadExcel={handleDownloadExcelIA}
-            onDownloadLog={handleDownloadLogIA}
-            onReset={resetApp}
-            onProcessLegalLocal={handleProcessLegalLocal}
-            logText={logText}
-          />
-        )}
-      </main>
-      <Footer />
-    </div>
-  );
-};
-
-export default App;
+if __name__ == '__main__':
+    app.run(host="localhost", port=5000, debug=True)
